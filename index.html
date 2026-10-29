@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#17140f">
+<meta name="description" content="A personal gym training log: workouts, streaks, progress and gyms.">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="GymSocial">
+<title>GymSocial</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Work+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; padding: 0; }
+  img { max-width: 100%; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<div class="app-frame">
+
+  <div class="topbar">
+    <div class="wordmark">Gym<span>Social</span></div>
+    <div class="topbar-right">
+      <div class="build-badge">Local only</div>
+      <button class="icon-btn" id="open-settings" aria-label="Settings">
+        <svg viewBox="0 0 24 24" stroke-width="1.8" stroke-linecap="round">
+          <path d="M4 7h5M13 7h7M4 12h11M19 12h1M4 17h3M11 17h9"/>
+          <circle cx="11" cy="7" r="2"/><circle cx="17" cy="12" r="2"/><circle cx="9" cy="17" r="2"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+  <p class="local-note" id="storage-note"><strong>Your log lives only in this browser.</strong> Clearing site data or switching phones will lose it &mdash; back it up from Settings now and then.</p>
+
+  <div class="screens">
+
+    <!-- LOG -->
+    <section class="screen" id="screen-log">
+      <div class="screen-head"><h1>Log Workout</h1><p>Check in, add what you trained, save it.</p></div>
+
+      <div class="field">
+        <label class="field-label" for="log-gym">Gym (optional check-in)</label>
+        <select id="log-gym"></select>
+        <div class="inline-add">
+          <input type="text" id="new-gym-name" placeholder="Add a new gym...">
+          <button class="btn btn-ghost" id="add-gym-btn">Add</button>
+        </div>
+      </div>
+
+      <div class="field">
+        <label class="field-label" for="log-date">Date</label>
+        <input type="date" id="log-date">
+        <div class="time-row">
+          <div>
+            <label class="field-label" for="log-start">Start</label>
+            <input type="time" id="log-start">
+          </div>
+          <div>
+            <label class="field-label" for="log-end">End (optional)</label>
+            <input type="time" id="log-end">
+          </div>
+          <div class="duration-readout" id="log-duration">&mdash;</div>
+        </div>
+      </div>
+
+      <div class="field">
+        <label class="field-label" for="log-title">Title (optional)</label>
+        <input type="text" id="log-title" placeholder="e.g. Push Day">
+      </div>
+
+      <div class="field">
+        <label class="field-label" for="log-calories">Calories burned (optional)</label>
+        <input type="number" inputmode="numeric" id="log-calories" placeholder="From your watch or tracker">
+      </div>
+
+      <div id="exercise-blocks"></div>
+      <button class="add-exercise-btn" id="add-exercise-btn">+ Add Exercise</button>
+
+      <button class="btn btn-primary btn-block" id="save-workout-btn">Save Workout</button>
+    </section>
+
+    <!-- PROGRESS -->
+    <section class="screen" id="screen-progress">
+      <div class="screen-head"><h1>Progress</h1><p>Top weight per session, over time.</p></div>
+      <div id="progress-chips" class="chip-row"></div>
+      <div id="progress-body"></div>
+    </section>
+
+    <!-- GYMS -->
+    <section class="screen" id="screen-gyms">
+      <div class="screen-head"><h1>Gyms</h1><p>Find the perfect gym for the perfect exercise -- based on what's actually logged there.</p></div>
+      <div class="search-input-wrap">
+        <input type="text" id="gym-search" placeholder="Search gyms...">
+      </div>
+      <div class="inline-add" style="margin-bottom:16px;">
+        <input type="text" id="gyms-new-name" placeholder="Add a gym...">
+        <button class="btn btn-ghost" id="gyms-add-btn">Add</button>
+      </div>
+      <div id="gym-list"></div>
+    </section>
+
+    <!-- HOME -->
+    <section class="screen active" id="screen-home">
+      <div class="screen-head"><h1 id="home-greeting">Your Training</h1></div>
+
+      <div id="streak-card"></div>
+
+      <div class="stat-grid" id="profile-stats"></div>
+
+      <div class="cal-card">
+        <div class="cal-head">
+          <button class="cal-nav" id="cal-prev" aria-label="Previous month">&lsaquo;</button>
+          <span class="cal-month" id="cal-month"></span>
+          <button class="cal-nav" id="cal-next" aria-label="Next month">&rsaquo;</button>
+        </div>
+        <div class="cal-grid" id="cal-grid"></div>
+        <p class="cal-hint" id="cal-hint"></p>
+      </div>
+
+      <div class="section-head">
+        <h2 id="profile-workouts-heading">History</h2>
+        <span class="result-count" id="profile-count" style="margin:0;"></span>
+      </div>
+      <div class="search-input-wrap">
+        <input type="text" id="profile-search" placeholder="Search your workouts...">
+      </div>
+      <div id="profile-workouts"></div>
+
+    </section>
+
+  </div>
+
+  <div id="toast"></div>
+
+  <nav class="tabbar">
+    <button class="tab-btn active" data-tab="home">
+      <svg viewBox="0 0 24 24" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11.2 12 4l8 7.2"/><path d="M5.5 10v9.5h5V14h3v5.5h5V10"/></svg>
+      Home
+    </button>
+    <button class="tab-btn" data-tab="log">
+      <svg viewBox="0 0 24 24" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 8v8M8 12h8"/></svg>
+      Log
+    </button>
+    <button class="tab-btn" data-tab="progress">
+      <svg viewBox="0 0 24 24" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 16.5 9 10l3.5 3.5L20 5"/><path d="M15 5h5v5"/></svg>
+      Progress
+    </button>
+    <button class="tab-btn" data-tab="gyms">
+      <svg viewBox="0 0 24 24" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 12h12" stroke-width="2.6"/><path d="M3.6 9.5v5M20.4 9.5v5"/><path d="M2 10.5v3M22 10.5v3"/></svg>
+      Gyms
+    </button>
+  </nav>
+</div>
+
+<!-- Gym detail modal (outside the tab flow so it can overlay any screen) -->
+<div class="modal-overlay" id="gym-modal-overlay">
+  <div class="modal-sheet">
+    <div class="modal-head">
+      <div>
+        <h2 id="gym-modal-name" style="font-size:19px;"></h2>
+        <div id="gym-modal-city" style="color:var(--text-muted);font-size:12.5px;margin-top:2px;"></div>
+      </div>
+      <button class="modal-close" id="gym-modal-close">Close</button>
+    </div>
+    <div id="gym-modal-offerings" style="margin-bottom:16px;"></div>
+    <div id="gym-modal-summary"></div>
+    <h3 style="font-size:14px;letter-spacing:0.03em;color:var(--text-muted);margin-bottom:8px;">What you train here</h3>
+    <div id="gym-modal-popular"></div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="settings-modal-overlay">
+  <div class="modal-sheet">
+    <div class="modal-head">
+      <h2 style="font-size:19px;">Settings</h2>
+      <button class="modal-close" id="settings-modal-close">Done</button>
+    </div>
+    <div id="settings-body"></div>
+    <button class="btn btn-ghost btn-block" id="reset-demo-btn" style="margin-top:20px;color:var(--danger);border-color:var(--danger);">Erase all my data</button>
+  </div>
+</div>
+
+<div class="modal-overlay" id="list-modal-overlay" style="z-index:26;">
+  <div class="modal-sheet">
+    <div class="modal-head">
+      <h2 id="list-modal-title" style="font-size:19px;"></h2>
+      <button class="modal-close" id="list-modal-close">Close</button>
+    </div>
+    <div id="list-modal-body"></div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="edit-modal-overlay">
+  <div class="modal-sheet">
+    <div class="modal-head">
+      <h2 style="font-size:19px;">Edit Workout</h2>
+      <button class="modal-close" id="edit-modal-close">Cancel</button>
+    </div>
+
+    <div class="field">
+      <label class="field-label" for="edit-gym">Gym</label>
+      <select id="edit-gym"></select>
+    </div>
+
+    <div class="field">
+      <label class="field-label" for="edit-date">Date</label>
+      <input type="date" id="edit-date">
+      <div class="time-row">
+        <div>
+          <label class="field-label" for="edit-start">Start</label>
+          <input type="time" id="edit-start">
+        </div>
+        <div>
+          <label class="field-label" for="edit-end">End</label>
+          <input type="time" id="edit-end">
+        </div>
+        <div class="duration-readout" id="edit-duration">&mdash;</div>
+      </div>
+    </div>
+
+    <div class="field">
+      <label class="field-label" for="edit-title">Title</label>
+      <input type="text" id="edit-title" placeholder="e.g. Push Day">
+    </div>
+
+    <div class="field">
+      <label class="field-label" for="edit-calories">Calories burned</label>
+      <input type="number" inputmode="numeric" id="edit-calories" placeholder="From your watch or tracker">
+    </div>
+
+    <label class="field-label">Exercises</label>
+    <div id="edit-exercise-blocks"></div>
+    <button class="add-exercise-btn" id="edit-add-exercise-btn">+ Add Exercise</button>
+
+    <button class="btn btn-primary btn-block" id="edit-save-btn">Save Changes</button>
+    <button class="btn-danger-text" id="edit-delete-btn" style="display:block;margin:14px auto 0;font-size:13px;">Delete this workout</button>
+  </div>
+</div>
+
+<div class="modal-overlay" id="exercise-modal-overlay" style="z-index:25;">
+  <div class="modal-sheet">
+    <div class="modal-head">
+      <h2 style="font-size:19px;">Add Exercise</h2>
+      <button class="modal-close" id="exercise-modal-close">Close</button>
+    </div>
+    <div class="search-input-wrap">
+      <input type="text" id="exercise-search" placeholder="Type an exercise...">
+    </div>
+    <div id="exercise-modal-list" style="max-height:52vh;overflow-y:auto;"></div>
+  </div>
+</div>
+<script type="module" src="/src/main.js"></script>
+</body>
+</html>

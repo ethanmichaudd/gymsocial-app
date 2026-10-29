@@ -1,0 +1,8 @@
+{
+  "appId": "com.gymsocial.app",
+  "appName": "GymSocial",
+  "webDir": "dist",
+  "backgroundColor": "#17140f",
+  "ios": { "contentInset": "always" },
+  "android": { "backgroundColor": "#17140f" }
+}

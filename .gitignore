@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.env
+.env.local
+.DS_Store
+
+# Capacitor generates these; recreate with `npx cap add ios|android`
+/ios
+/android
