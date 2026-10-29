@@ -100,7 +100,7 @@
     top: 0;
     z-index: 5;
     background: linear-gradient(180deg, var(--bg) 70%, rgba(23,20,15,0));
-    padding: calc(18px + env(safe-area-inset-top)) 20px 10px;
+    padding: 18px 20px 10px;
     display: flex;
     align-items: baseline;
     justify-content: space-between;
@@ -755,7 +755,7 @@
     display: flex;
     background: var(--surface);
     border-top: 1px solid var(--border);
-    padding: 8px 6px calc(8px + env(safe-area-inset-bottom));
+    padding: 8px 6px max(8px, env(safe-area-inset-bottom));
   }
   .tab-btn {
     flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px;
