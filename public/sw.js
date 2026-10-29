@@ -1,9 +1,12 @@
 /* Cache the app shell so it opens with no connection. Bump CACHE on release. */
-const CACHE = "gymsocial-v1";
+const CACHE = "gymsocial-v2";
 
 self.addEventListener("install", (event) => {
   self.skipWaiting();
-  event.waitUntil(caches.open(CACHE).then((c) => c.add("./")));
+  event.waitUntil(
+    // cache-bust the shell so a new worker never stores a stale copy
+    caches.open(CACHE).then((c) => c.add(new Request("./", { cache: "reload" })))
+  );
 });
 
 self.addEventListener("activate", (event) => {
