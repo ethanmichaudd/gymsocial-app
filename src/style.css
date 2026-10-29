@@ -31,7 +31,9 @@
   html { touch-action: manipulation; -webkit-text-size-adjust: 100%; }
 
   html, body {
-    background: var(--bg);
+    /* iOS paints the strip below the web view in standalone with the page
+       background; matching the tab bar makes that strip read as part of it. */
+    background: var(--surface);
     color: var(--text);
     margin: 0;
     height: 100%;
@@ -100,7 +102,7 @@
     top: 0;
     z-index: 5;
     background: linear-gradient(180deg, var(--bg) 70%, rgba(23,20,15,0));
-    padding: 18px 20px 10px;
+    padding: calc(18px + env(safe-area-inset-top)) 20px 10px;
     display: flex;
     align-items: baseline;
     justify-content: space-between;
