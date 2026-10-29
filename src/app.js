@@ -2069,6 +2069,19 @@ import { loadState, saveState } from "./store.js";
     showToast("Everything erased.");
   });
 
+  /* The storage warning matters once; after that it's clutter. */
+  (function storageNote() {
+    var note = document.getElementById("storage-note");
+    var btn = document.getElementById("note-dismiss");
+    if (!note || !btn) return;
+    if (state.settings.hideStorageNote) note.hidden = true;
+    btn.addEventListener("click", function () {
+      note.hidden = true;
+      state.settings.hideStorageNote = true;
+      persist();
+    });
+  })();
+
   /* ----------------------------- boot ----------------------------- */
 
   persist();

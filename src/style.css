@@ -49,7 +49,7 @@
   .app-frame {
     width: 100%;
     max-width: 480px;
-    height: 100dvh;
+    height: 100%;
     background: var(--bg);
     display: flex;
     flex-direction: column;
@@ -60,7 +60,7 @@
   @media (min-width: 600px) {
     body { background: #0e0c09; padding: 32px 0; }
     .app-frame {
-      height: min(860px, calc(100dvh - 64px));
+      height: min(860px, calc(100% - 64px));
       border-radius: 28px;
       border: 1px solid var(--border);
       box-shadow: var(--shadow);
@@ -135,7 +135,15 @@
     font-size: 12.5px;
     line-height: 1.5;
   }
+  .local-note { position: relative; padding-right: 34px; }
   .local-note strong { color: var(--text); }
+  .note-close {
+    position: absolute; top: 6px; right: 6px;
+    width: 24px; height: 24px; border: none; background: none;
+    color: var(--text-faint); font-size: 17px; line-height: 1;
+    cursor: pointer; border-radius: 6px; font-family: inherit;
+  }
+  .note-close:active { color: var(--text); background: var(--surface-2); }
 
   /* ---------- screens ---------- */
   .screens { flex: 1; overflow: hidden; position: relative; }
