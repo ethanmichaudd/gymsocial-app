@@ -31,8 +31,9 @@
   html { touch-action: manipulation; -webkit-text-size-adjust: 100%; }
 
   html, body {
-    /* TEMP DIAGNOSTIC: magenta = anything iOS paints outside the web view. */
-    background: #ff00ff;
+    /* iOS paints the bands above and below the web view with this color, so
+       the header and tab bar both use it and the bands read as part of them. */
+    background: var(--bg);
     color: var(--text);
     margin: 0;
     height: 100%;
@@ -60,8 +61,6 @@
     display: flex;
     flex-direction: column;
     border-inline: 1px solid transparent;
-    /* TEMP DIAGNOSTIC: lime line = the exact bottom edge of the web view. */
-    border-bottom: 3px solid #00ff00;
   }
 
   @media (min-width: 600px) {
@@ -756,11 +755,9 @@
   .tabbar {
     position: sticky; bottom: 0;
     display: flex;
-    background: var(--surface);
+    background: var(--bg);
     border-top: 1px solid var(--border);
     padding: 8px 6px max(8px, env(safe-area-inset-bottom));
-    /* TEMP DIAGNOSTIC: cyan line = where the tab bar's own box ends. */
-    box-shadow: inset 0 -3px 0 #00e5ff;
   }
   .tab-btn {
     flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px;
