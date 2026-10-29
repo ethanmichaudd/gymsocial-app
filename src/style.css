@@ -770,3 +770,7 @@
   @media (prefers-reduced-motion: reduce) {
     * { transition: none !important; animation: none !important; }
   }
+
+  .diag { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 12px; }
+  .diag-row { display: flex; justify-content: space-between; gap: 10px; font-size: 11.5px; padding: 3px 0; color: var(--text-muted); }
+  .diag-row .num { color: var(--text); font-family: "IBM Plex Mono", monospace; }

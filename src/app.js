@@ -554,6 +554,16 @@ import { loadState, saveState } from "./store.js";
         '</div>' +
 
         '<div class="setting-block">' +
+          '<label class="field-label">Device report</label>' +
+          '<div class="diag">' +
+            deviceReport().map(function (row) {
+              return '<div class="diag-row"><span>' + row[0] + '</span><span class="num">' + row[1] + '</span></div>';
+            }).join("") +
+          '</div>' +
+          '<p class="setting-help">Temporary -- for diagnosing layout on your phone.</p>' +
+        '</div>' +
+
+        '<div class="setting-block">' +
           '<label class="field-label">Streak counted by</label>' +
           '<div class="segmented">' +
             ["weekly", "daily", "custom"].map(function (m) {
@@ -860,6 +870,41 @@ import { loadState, saveState } from "./store.js";
         node.textContent = step;
       }, 40);
     });
+  }
+
+
+  /* Temporary: shows what this device actually reports, so layout bugs that
+     only happen in a home-screen app can be diagnosed instead of guessed at. */
+  function deviceReport() {
+    var probe = document.createElement("div");
+    probe.style.cssText =
+      "position:fixed;top:0;left:0;visibility:hidden;" +
+      "padding:env(safe-area-inset-top) env(safe-area-inset-right) " +
+      "env(safe-area-inset-bottom) env(safe-area-inset-left);";
+    document.body.appendChild(probe);
+    var cs = getComputedStyle(probe);
+    var insets = {
+      top: cs.paddingTop, right: cs.paddingRight,
+      bottom: cs.paddingBottom, left: cs.paddingLeft
+    };
+    probe.remove();
+
+    var frame = document.querySelector(".app-frame").getBoundingClientRect();
+    var tabs = document.querySelector(".tabbar").getBoundingClientRect();
+    var vv = window.visualViewport;
+
+    return [
+      ["standalone", (window.navigator.standalone ? "yes" : "no") +
+        (window.matchMedia("(display-mode: standalone)").matches ? " / display-mode" : "")],
+      ["window.innerHeight", window.innerHeight],
+      ["visualViewport", vv ? Math.round(vv.height) : "n/a"],
+      ["screen.height", screen.height],
+      ["safe top / bottom", insets.top + " / " + insets.bottom],
+      ["frame top / bottom", Math.round(frame.top) + " / " + Math.round(frame.bottom)],
+      ["tabbar top / bottom", Math.round(tabs.top) + " / " + Math.round(tabs.bottom)],
+      ["gap below tabbar", Math.round(window.innerHeight - tabs.bottom)],
+      ["dpr", window.devicePixelRatio]
+    ];
   }
 
   /* ----------------------------- settings sheet ----------------------------- */
