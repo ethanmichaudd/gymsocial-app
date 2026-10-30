@@ -773,6 +773,49 @@
     * { transition: none !important; animation: none !important; }
   }
 
-  .diag { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 12px; }
-  .diag-row { display: flex; justify-content: space-between; gap: 10px; font-size: 11.5px; padding: 3px 0; color: var(--text-muted); }
-  .diag-row .num { color: var(--text); font-family: "IBM Plex Mono", monospace; }
+
+  /* ---------- equipment ---------- */
+  /* A sideways rail rather than a dropdown: every option is one thumb-tap
+     away and the common ones sit where you can see them. */
+  .equip-scroll {
+    display: flex; gap: 6px; overflow-x: auto; margin-bottom: 10px;
+    padding-bottom: 3px; -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .equip-scroll::-webkit-scrollbar { display: none; }
+  .equip-btn {
+    flex: 0 0 auto; white-space: nowrap;
+    background: var(--surface-2); border: 1px solid var(--border);
+    color: var(--text-muted); border-radius: 999px;
+    padding: 7px 13px; font-size: 11.5px; font-weight: 600;
+    font-family: inherit; cursor: pointer;
+  }
+  .equip-btn.selected { background: var(--accent); border-color: var(--accent); color: #1a0e08; }
+  .equip-btn.is-static { opacity: 0.7; }
+  .equip-btn .x { margin-left: 7px; color: var(--danger); font-weight: 700; }
+  .equip-add { display: flex; gap: 8px; }
+  .equip-add input { flex: 1; min-width: 0; }
+  .equip-add .btn { flex: 0 0 auto; }
+  .chip-eq {
+    font-size: 9.5px; letter-spacing: 0.05em; text-transform: uppercase;
+    color: var(--text-faint);
+  }
+
+  /* bodyweight: the weight column comes out instead of sitting empty */
+  .set-row.no-weight, .set-head.no-weight,
+  .set-row.no-weight.has-duration, .set-head.no-weight.has-duration {
+    grid-template-columns: 20px 1fr 26px;
+  }
+
+  /* ---------- renaming an exercise in place ---------- */
+  .ex-name { cursor: pointer; display: flex; align-items: center; gap: 6px; }
+  .ex-pencil { color: var(--text-faint); font-size: 12px; }
+  .ex-name-input {
+    flex: 1; min-width: 0; margin-right: 10px;
+    background: var(--surface-2); border: 1px solid var(--accent);
+    border-radius: var(--radius-sm); color: var(--text);
+    font-family: "Work Sans", sans-serif; font-weight: 700;
+    font-size: 15px; padding: 7px 9px;
+  }
+
+  .note-input { resize: none; overflow: hidden; line-height: 1.45; display: block; }

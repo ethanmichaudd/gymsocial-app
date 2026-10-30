@@ -20,6 +20,29 @@ import { loadState, saveState } from "./store.js";
     distance: { label: "Distance", col1: "Time",  col2: "Distance", unitKey: "distUnit", units: ["mi", "km"] }
   };
 
+  /* What the movement was loaded with. Chosen per exercise in a session, so
+     "Bench, dumbbell" and "Bench, barbell" stay distinguishable without being
+     two separate catalogue entries. Bodyweight drops the weight box. */
+  var BUILTIN_EQUIPMENT = [
+    "Bodyweight", "Dumbbell", "Barbell", "EZ bar", "Straight bar", "Trap bar",
+    "Kettlebell", "Smith machine", "Cable", "Machine", "Plate loaded",
+    "Resistance band", "Medicine ball", "Suspension"
+  ];
+
+  function equipmentList() {
+    return BUILTIN_EQUIPMENT.concat((state.settings && state.settings.customEquipment) || []);
+  }
+
+  /* The one piece of equipment that changes the form: there is no weight to
+     type in, so the column comes out rather than sitting there empty. */
+  function isBodyweight(blk) {
+    return String(blk && blk.equipment || "").toLowerCase() === "bodyweight";
+  }
+
+  function dropsWeight(blk, metric) {
+    return isBodyweight(blk) && metric !== "distance";
+  }
+
   /* Exercises that are obviously not rep-and-weight start in the right mode. */
   var DEFAULT_METRIC = {
     "Plank": "time",
@@ -132,7 +155,7 @@ import { loadState, saveState } from "./store.js";
       workouts: [],
       settings: {
         weeklyGoal: 3, streakMode: "weekly", customCount: 4, customDays: 10,
-        schemaVersion: SCHEMA_VERSION
+        customEquipment: [], schemaVersion: SCHEMA_VERSION
       }
     };
   }
@@ -154,6 +177,7 @@ import { loadState, saveState } from "./store.js";
     if (!s.settings.streakMode) s.settings.streakMode = "weekly";
     if (s.settings.customCount == null) s.settings.customCount = 4;
     if (s.settings.customDays == null) s.settings.customDays = 10;
+    if (!s.settings.customEquipment) s.settings.customEquipment = [];
     (s.exercises || []).forEach(function (e) {
       if (!e.category) e.category = EXERCISE_CATEGORIES[e.name] || "other";
       if (!e.metric) e.metric = DEFAULT_METRIC[e.name] || "reps";
@@ -531,6 +555,8 @@ import { loadState, saveState } from "./store.js";
         stepperHtml("customDays", "Every", st.customDays, " days");
     }
 
+    var custom = st.customEquipment || [];
+
     var modeHelp = {
       weekly: "Counts Sunday-Saturday weeks that hit your target. Rest days never break it.",
       daily: "Counts consecutive days trained. Strict -- a single rest day resets it.",
@@ -554,13 +580,20 @@ import { loadState, saveState } from "./store.js";
         '</div>' +
 
         '<div class="setting-block">' +
-          '<label class="field-label">Device report</label>' +
-          '<div class="diag">' +
-            deviceReport().map(function (row) {
-              return '<div class="diag-row"><span>' + row[0] + '</span><span class="num">' + row[1] + '</span></div>';
+          '<label class="field-label">Equipment</label>' +
+          '<div class="equip-scroll in-settings">' +
+            equipmentList().map(function (eq) {
+              return custom.indexOf(eq) !== -1
+                ? '<button class="equip-btn" data-del-equip="' + esc(eq) + '">' + esc(eq) +
+                    '<span class="x">&times;</span></button>'
+                : '<span class="equip-btn is-static">' + esc(eq) + '</span>';
             }).join("") +
           '</div>' +
-          '<p class="setting-help">Temporary -- for diagnosing layout on your phone.</p>' +
+          '<div class="equip-add">' +
+            '<input type="text" id="set-equip" placeholder="Add your own">' +
+            '<button class="btn btn-ghost" data-add-equip="1">Add</button>' +
+          '</div>' +
+          '<p class="setting-help">Shows as a row under each exercise. Tap one of yours to remove it.</p>' +
         '</div>' +
 
         '<div class="setting-block">' +
@@ -600,6 +633,29 @@ import { loadState, saveState } from "./store.js";
       btn.addEventListener("click", function () {
         if (btn.getAttribute("data-backup") === "export") openExportSheet();
         else openImportSheet();
+      });
+    });
+
+    var equipInput = el.querySelector("#set-equip");
+    el.querySelector("[data-add-equip]").addEventListener("click", function () {
+      var v = (equipInput.value || "").trim();
+      if (!v) return;
+      var taken = equipmentList().filter(function (x) {
+        return x.toLowerCase() === v.toLowerCase();
+      })[0];
+      if (taken) { showToast("\"" + taken + "\" is already on the list."); return; }
+      state.settings.customEquipment.push(v);
+      persist();
+      renderSettings();
+    });
+    el.querySelectorAll("[data-del-equip]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var name = btn.getAttribute("data-del-equip");
+        state.settings.customEquipment = state.settings.customEquipment.filter(function (x) {
+          return x !== name;
+        });
+        persist();
+        renderSettings();
       });
     });
 
@@ -873,40 +929,6 @@ import { loadState, saveState } from "./store.js";
   }
 
 
-  /* Temporary: shows what this device actually reports, so layout bugs that
-     only happen in a home-screen app can be diagnosed instead of guessed at. */
-  function deviceReport() {
-    var probe = document.createElement("div");
-    probe.style.cssText =
-      "position:fixed;top:0;left:0;visibility:hidden;" +
-      "padding:env(safe-area-inset-top) env(safe-area-inset-right) " +
-      "env(safe-area-inset-bottom) env(safe-area-inset-left);";
-    document.body.appendChild(probe);
-    var cs = getComputedStyle(probe);
-    var insets = {
-      top: cs.paddingTop, right: cs.paddingRight,
-      bottom: cs.paddingBottom, left: cs.paddingLeft
-    };
-    probe.remove();
-
-    var frame = document.querySelector(".app-frame").getBoundingClientRect();
-    var tabs = document.querySelector(".tabbar").getBoundingClientRect();
-    var vv = window.visualViewport;
-
-    return [
-      ["standalone", (window.navigator.standalone ? "yes" : "no") +
-        (window.matchMedia("(display-mode: standalone)").matches ? " / display-mode" : "")],
-      ["window.innerHeight", window.innerHeight],
-      ["visualViewport", vv ? Math.round(vv.height) : "n/a"],
-      ["screen.height", screen.height],
-      ["safe top / bottom", insets.top + " / " + insets.bottom],
-      ["frame top / bottom", Math.round(frame.top) + " / " + Math.round(frame.bottom)],
-      ["tabbar top / bottom", Math.round(tabs.top) + " / " + Math.round(tabs.bottom)],
-      ["gap below tabbar", Math.round(window.innerHeight - tabs.bottom)],
-      ["dpr", window.devicePixelRatio]
-    ];
-  }
-
   /* ----------------------------- settings sheet ----------------------------- */
 
   function openSettings() {
@@ -1145,7 +1167,8 @@ import { loadState, saveState } from "./store.js";
       var best = bestValueIn(we.sets, metric);
       var unit = unitFor(we.sets, metric);
       var note = we.note ? ' <span class="chip-note" title="' + esc(we.note) + '">note</span>' : "";
-      return '<span class="exercise-chip">' + esc(exObj ? exObj.name : "Exercise") +
+      var eq = we.equipment ? ' <span class="chip-eq">' + esc(we.equipment) + '</span>' : "";
+      return '<span class="exercise-chip">' + esc(exObj ? exObj.name : "Exercise") + eq +
         (best != null ? ' <span class="num">' + esc(formatValue(best, metric, unit)) + '</span>' : '') +
         note + '</span>';
     }).join("");
@@ -1351,6 +1374,7 @@ import { loadState, saveState } from "./store.js";
         : '<div class="last-time is-new">First time logging this</div>';
 
       var dur = usesDuration(metric);
+      var noWt = dropsWeight(blk, metric);
       var rows = blk.sets.map(function (s, si) {
         var v2 = metric === "distance"
           ? (s.distance == null ? "" : s.distance)
@@ -1368,19 +1392,22 @@ import { loadState, saveState } from "./store.js";
           firstCell = '<input type="number" inputmode="numeric" placeholder="Reps" class="set-v1" value="' +
             esc(s.reps == null ? "" : s.reps) + '">';
         }
+        var weightCells = noWt ? "" :
+          '<input type="number" inputmode="decimal" placeholder="' + cfg.col2 + '" class="set-v2" value="' + esc(v2) + '">' +
+          '<button class="unit-toggle" data-unit-toggle>' + (s[unitKey] || cfg.units[0]) + '</button>';
         return '' +
-          '<div class="set-row' + (dur ? " has-duration" : "") + '" data-ex="' + i + '" data-set="' + si + '">' +
+          '<div class="set-row' + (dur ? " has-duration" : "") + (noWt ? " no-weight" : "") +
+              '" data-ex="' + i + '" data-set="' + si + '">' +
             '<span class="set-index">' + (si + 1) + '</span>' +
             firstCell +
-            '<input type="number" inputmode="decimal" placeholder="' + cfg.col2 + '" class="set-v2" value="' + esc(v2) + '">' +
-            '<button class="unit-toggle" data-unit-toggle>' + (s[unitKey] || cfg.units[0]) + '</button>' +
+            weightCells +
             '<button class="set-remove" data-remove-set="' + si + '" data-remove-set-ex="' + i + '" aria-label="Remove set ' + (si + 1) + '">&times;</button>' +
           '</div>';
       }).join("");
 
       var noteOpen = blk.showNote || (blk.note && blk.note.length);
       var noteHtml = noteOpen
-        ? '<input type="text" class="note-input" data-note="' + i + '" placeholder="How did it feel? Form cues, aches..." value="' + esc(blk.note || "") + '">'
+        ? '<textarea class="note-input" rows="2" data-note="' + i + '" placeholder="How did it feel? Form cues, aches...">' + esc(blk.note || "") + '</textarea>'
         : '<button class="add-set-link" data-add-note="' + i + '">+ Note</button>';
 
       var prevBlk = draftObj.exercises[i - 1];
@@ -1393,7 +1420,9 @@ import { loadState, saveState } from "./store.js";
       return '' +
         '<div class="exercise-block' + (blk.superset ? " in-superset" : "") + '">' +
           (ssLabels[i] ? '<span class="ss-tag">' + ssLabels[i] + '</span>' : "") +
-          '<div class="exercise-block-head"><h3>' + esc(exObj ? exObj.name : "Exercise") + '</h3>' +
+          '<div class="exercise-block-head">' +
+            '<h3 class="ex-name" data-rename="' + i + '" title="Tap to rename">' +
+              esc(exObj ? exObj.name : "Exercise") + '<span class="ex-pencil">&#9998;</span></h3>' +
             '<button class="btn-danger-text" data-remove-ex="' + i + '">Remove</button></div>' +
           lastLine +
           '<div class="metric-switch">' +
@@ -1402,11 +1431,18 @@ import { loadState, saveState } from "./store.js";
                 '" data-metric="' + i + ':' + m + '">' + METRICS[m].label + '</button>';
             }).join("") +
           '</div>' +
-          '<div class="set-head' + (dur ? " has-duration" : "") + '"><span></span>' +
+          '<div class="equip-scroll">' +
+            equipmentList().map(function (eq) {
+              return '<button class="equip-btn' + (blk.equipment === eq ? " selected" : "") +
+                '" data-equip="' + i + ':' + esc(eq) + '">' + esc(eq) + '</button>';
+            }).join("") +
+          '</div>' +
+          '<div class="set-head' + (dur ? " has-duration" : "") + (noWt ? " no-weight" : "") + '"><span></span>' +
             (dur
               ? '<span class="dur-head"><span>Hr</span><span>Min</span><span>Sec</span></span>'
               : '<span>' + cfg.col1 + '</span>') +
-            '<span>' + cfg.col2 + '</span><span></span><span></span></div>' +
+            (noWt ? '<span></span>' : '<span>' + cfg.col2 + '</span><span></span><span></span>') +
+          '</div>' +
           rows +
           '<div class="block-foot">' +
             '<button class="add-set-link" data-add-set="' + i + '">+ Add set</button>' +
@@ -1455,6 +1491,53 @@ import { loadState, saveState } from "./store.js";
       });
     });
 
+    // what it was loaded with
+    containerEl.querySelectorAll("[data-equip]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var raw = btn.getAttribute("data-equip");
+        var cut = raw.indexOf(":");                 // a custom name may contain one
+        var blk = draftObj.exercises[Number(raw.slice(0, cut))];
+        var eq = raw.slice(cut + 1);
+        blk.equipment = blk.equipment === eq ? null : eq;   // tap again to clear
+        rerender();
+      });
+    });
+
+    // renaming reaches the catalogue entry, so every session using it follows
+    containerEl.querySelectorAll("[data-rename]").forEach(function (head) {
+      head.addEventListener("click", function () {
+        var blk = draftObj.exercises[Number(head.getAttribute("data-rename"))];
+        var exObj = findExercise(blk.exerciseId);
+        if (!exObj) return;
+        var input = document.createElement("input");
+        input.type = "text";
+        input.className = "ex-name-input";
+        input.value = exObj.name;
+        head.parentNode.replaceChild(input, head);
+        input.focus();
+        input.select();
+        var done = false;
+        var finish = function () {
+          if (done) return;
+          done = true;
+          var v = input.value.trim();
+          if (v && v !== exObj.name) {
+            var clash = state.exercises.filter(function (e) {
+              return e.id !== exObj.id && e.name.toLowerCase() === v.toLowerCase();
+            })[0];
+            if (clash) showToast("You already have an exercise called that.");
+            else { exObj.name = v; persist(); }
+          }
+          // re-rendering from inside blur tears this input out mid-event
+          setTimeout(rerender, 0);
+        };
+        input.addEventListener("blur", finish);
+        input.addEventListener("keydown", function (e) {
+          if (e.key === "Enter") { e.preventDefault(); input.blur(); }
+        });
+      });
+    });
+
     // notes
     containerEl.querySelectorAll("[data-add-note]").forEach(function (btn) {
       btn.addEventListener("click", function () {
@@ -1463,8 +1546,15 @@ import { loadState, saveState } from "./store.js";
       });
     });
     containerEl.querySelectorAll("[data-note]").forEach(function (input) {
+      // a textarea with no scrollbar: it grows to whatever you typed
+      var grow = function () {
+        input.style.height = "auto";
+        input.style.height = input.scrollHeight + "px";
+      };
+      grow();
       input.addEventListener("input", function (e) {
         draftObj.exercises[Number(input.getAttribute("data-note"))].note = e.target.value;
+        grow();
       });
     });
 
@@ -1509,18 +1599,24 @@ import { loadState, saveState } from "./store.js";
           setObj.reps = raw === "" ? null : Number(raw);
         });
       }
-      row.querySelector(".set-v2").addEventListener("input", function (e) {
-        var raw = e.target.value;
-        var val = raw === "" ? null : Number(raw);
-        if (metric === "distance") setObj.distance = val;
-        else setObj.weight = val;
-      });
-      row.querySelector("[data-unit-toggle]").addEventListener("click", function (e) {
-        var key = cfg.unitKey;
-        var cur = setObj[key] || cfg.units[0];
-        setObj[key] = cur === cfg.units[0] ? cfg.units[1] : cfg.units[0];
-        e.target.textContent = setObj[key];
-      });
+      var v2El = row.querySelector(".set-v2");          // absent on bodyweight
+      if (v2El) {
+        v2El.addEventListener("input", function (e) {
+          var raw = e.target.value;
+          var val = raw === "" ? null : Number(raw);
+          if (metric === "distance") setObj.distance = val;
+          else setObj.weight = val;
+        });
+      }
+      var unitEl = row.querySelector("[data-unit-toggle]");
+      if (unitEl) {
+        unitEl.addEventListener("click", function (e) {
+          var key = cfg.unitKey;
+          var cur = setObj[key] || cfg.units[0];
+          setObj[key] = cur === cfg.units[0] ? cfg.units[1] : cfg.units[0];
+          e.target.textContent = setObj[key];
+        });
+      }
     });
   }
 
@@ -1547,13 +1643,15 @@ import { loadState, saveState } from "./store.js";
   function blockFromLastTime(exObj, excludeWorkoutId) {
     var last = lastSessionFor(exObj.id, excludeWorkoutId);
     var metric = last ? metricOf(last.block) : (exObj.metric || "reps");
+    var equip = (last && last.block.equipment) || exObj.equipment || null;
     if (!last || !last.block.sets.length) {
-      return { exerciseId: exObj.id, metric: metric,
+      return { exerciseId: exObj.id, metric: metric, equipment: equip,
         sets: [{ reps: null, seconds: null, weight: null, distance: null, unit: "lb", distUnit: "mi" }] };
     }
     return {
       exerciseId: exObj.id,
       metric: metric,
+      equipment: equip,
       sets: last.block.sets.map(function (s) {
         return {
           reps: s.reps, seconds: s.seconds, weight: s.weight, distance: s.distance,
@@ -1578,6 +1676,11 @@ import { loadState, saveState } from "./store.js";
           return s.reps != null || s.weight != null;
         })
       };
+      if (blk.equipment) {
+        out.equipment = blk.equipment;
+        // bodyweight has no weight box, so don't carry a stale number through
+        if (dropsWeight(blk, metric)) out.sets.forEach(function (s) { s.weight = null; });
+      }
       if (blk.note && blk.note.trim()) out.note = blk.note.trim();
       if (blk.superset) out.superset = blk.superset;
       return out;
