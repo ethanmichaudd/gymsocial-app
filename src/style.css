@@ -498,7 +498,10 @@
   .gym-row .chevron { color: var(--text-faint); }
 
   .modal-overlay {
-    position: fixed; inset: 0; background: rgba(10, 8, 5, 0.72);
+    /* --kb is however much of the screen the keyboard covers, so a sheet
+       stops above it instead of being drawn underneath. */
+    position: fixed; inset: 0; bottom: var(--kb, 0px);
+    background: rgba(10, 8, 5, 0.72);
     display: flex; align-items: flex-end; justify-content: center;
     z-index: 20; visibility: hidden; opacity: 0; transition: opacity 0.15s ease;
   }
@@ -514,6 +517,21 @@
     transition: transform 0.15s ease;
   }
   .modal-overlay.open .modal-sheet { transform: translateY(0); }
+
+  /* The exercise picker keeps one height whatever you type and whether or not
+     the keyboard is up -- the list scrolls inside it, the sheet never moves.
+     54dvh clears a full iOS keyboard (about 40dvh) with room to spare. */
+  .modal-sheet.is-picker {
+    height: 54dvh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .modal-sheet.is-picker #exercise-modal-list {
+    flex: 1; min-height: 0; overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .modal-sheet.is-picker .search-input-wrap { flex: 0 0 auto; }
   .modal-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
   .modal-close { background: none; border: none; color: var(--text-muted); font-size: 13px; font-weight: 600; cursor: pointer; }
 

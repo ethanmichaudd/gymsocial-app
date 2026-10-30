@@ -2266,11 +2266,14 @@ import { loadState, saveState } from "./store.js";
     function apply() {
       if (getComputedStyle(frame).position !== "fixed") {  // wide screens
         frame.style.bottom = "";
+        document.documentElement.style.setProperty("--kb", "0px");
         document.body.classList.remove("kb-open");
         return;
       }
       var covered = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
       frame.style.bottom = covered + "px";
+      // modals sit outside the frame, so they read the same number from here
+      document.documentElement.style.setProperty("--kb", covered + "px");
       // a tab bar pinned above the keyboard is just wasted room
       document.body.classList.toggle("kb-open", covered > 80);
     }
