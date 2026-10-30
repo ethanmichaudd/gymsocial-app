@@ -23,15 +23,35 @@ import { loadState, saveState } from "./store.js";
   /* What the movement was loaded with. Chosen per exercise in a session, so
      "Bench, dumbbell" and "Bench, barbell" stay distinguishable without being
      two separate catalogue entries. Bodyweight drops the weight box. */
-  var BUILTIN_EQUIPMENT = [
-    "Bodyweight", "Dumbbell", "Barbell", "EZ bar", "Straight bar", "Trap bar",
-    "Kettlebell", "Smith machine", "Cable", "Machine", "Plate loaded",
-    "Resistance band", "Medicine ball", "Suspension"
-  ];
+  /* Deliberately short: these five cover most of what gets logged, and a
+     built-in cannot be deleted -- only hidden. Anything else you add yourself
+     from the rail, and that one you can delete. */
+  var BUILTIN_EQUIPMENT = ["Bodyweight", "Dumbbell", "Barbell", "Cable", "Machine"];
 
-  function equipmentList() {
-    return BUILTIN_EQUIPMENT.concat((state.settings && state.settings.customEquipment) || []);
+  function equipmentList(includeHidden) {
+    var st = state.settings || {};
+    var all = BUILTIN_EQUIPMENT.concat(st.customEquipment || []);
+    if (includeHidden) return all;
+    var off = st.hiddenEquipment || [];
+    return all.filter(function (e) { return off.indexOf(e) === -1; });
   }
+
+  /* Anything typed in gets its words capitalised -- "machine incline" files
+     as "Machine Incline". A word that already has a capital in it is left
+     alone, so "EZ bar" does not come back as "Ez Bar". */
+  function titleCase(s) {
+    return String(s || "").trim().replace(/\s+/g, " ").split(" ").map(function (w) {
+      return w === w.toLowerCase() ? w.charAt(0).toUpperCase() + w.slice(1) : w;
+    }).join(" ");
+  }
+
+  function isCustomEquipment(name) {
+    return BUILTIN_EQUIPMENT.indexOf(name) === -1;
+  }
+
+  /* Reps are loaded with something. A plank or a treadmill run is not, so the
+     rail would only be one more thing to scroll past. */
+  function usesEquipment(metric) { return metric === "reps"; }
 
   /* The one piece of equipment that changes the form: there is no weight to
      type in, so the column comes out rather than sitting there empty. */
@@ -155,7 +175,8 @@ import { loadState, saveState } from "./store.js";
       workouts: [],
       settings: {
         weeklyGoal: 3, streakMode: "weekly", customCount: 4, customDays: 10,
-        customEquipment: [], schemaVersion: SCHEMA_VERSION
+        customEquipment: [], hiddenEquipment: [], numberEntry: "wheel",
+        schemaVersion: SCHEMA_VERSION
       }
     };
   }
@@ -178,6 +199,8 @@ import { loadState, saveState } from "./store.js";
     if (s.settings.customCount == null) s.settings.customCount = 4;
     if (s.settings.customDays == null) s.settings.customDays = 10;
     if (!s.settings.customEquipment) s.settings.customEquipment = [];
+    if (!s.settings.hiddenEquipment) s.settings.hiddenEquipment = [];
+    if (!s.settings.numberEntry) s.settings.numberEntry = "wheel";
     (s.exercises || []).forEach(function (e) {
       if (!e.category) e.category = EXERCISE_CATEGORIES[e.name] || "other";
       if (!e.metric) e.metric = DEFAULT_METRIC[e.name] || "reps";
@@ -542,6 +565,20 @@ import { loadState, saveState } from "./store.js";
       '</div></div>';
   }
 
+  /* The equipment rails are drawn into the log and edit screens, so a change
+     made in Settings has to reach them -- otherwise you close Settings and the
+     rail is still showing what you just hid. */
+  function refreshEquipmentRails(removed) {
+    [draft, editDraft].forEach(function (d) {
+      if (!d || !d.exercises) return;
+      d.exercises.forEach(function (blk) {
+        if (removed && blk.equipment === removed) blk.equipment = null;
+      });
+    });
+    renderLog();
+    if (document.getElementById("edit-modal-overlay").classList.contains("open")) renderEditModal();
+  }
+
   function renderSettings() {
     var el = document.getElementById("settings-body");
     var st = state.settings;
@@ -555,7 +592,8 @@ import { loadState, saveState } from "./store.js";
         stepperHtml("customDays", "Every", st.customDays, " days");
     }
 
-    var custom = st.customEquipment || [];
+    var hidden = st.hiddenEquipment || [];
+    var entry = st.numberEntry || "wheel";
 
     var modeHelp = {
       weekly: "Counts Sunday-Saturday weeks that hit your target. Rest days never break it.",
@@ -581,19 +619,36 @@ import { loadState, saveState } from "./store.js";
 
         '<div class="setting-block">' +
           '<label class="field-label">Equipment</label>' +
-          '<div class="equip-scroll in-settings">' +
-            equipmentList().map(function (eq) {
-              return custom.indexOf(eq) !== -1
+          '<div class="equip-wrap">' +
+            equipmentList(true).map(function (eq) {
+              return isCustomEquipment(eq)
                 ? '<button class="equip-btn" data-del-equip="' + esc(eq) + '">' + esc(eq) +
                     '<span class="x">&times;</span></button>'
-                : '<span class="equip-btn is-static">' + esc(eq) + '</span>';
+                : '<button class="equip-btn is-builtin' + (hidden.indexOf(eq) !== -1 ? " is-off" : "") +
+                    '" data-hide-equip="' + esc(eq) + '">' + esc(eq) + '</button>';
             }).join("") +
           '</div>' +
           '<div class="equip-add">' +
             '<input type="text" id="set-equip" placeholder="Add your own">' +
             '<button class="btn btn-ghost" data-add-equip="1">Add</button>' +
           '</div>' +
-          '<p class="setting-help">Shows as a row under each exercise. Tap one of yours to remove it.</p>' +
+          '<p class="setting-help">Tap a built-in to hide it from the rail; tap one of yours to delete it. ' +
+            'Past sessions keep whatever they were logged with. The rail only shows on Reps.</p>' +
+        '</div>' +
+
+        '<div class="setting-block">' +
+          '<label class="field-label">Entering reps and weight</label>' +
+          '<div class="segmented">' +
+            [["wheel", "Wheel"], ["keyboard", "Keyboard"]].map(function (o) {
+              return '<button class="seg-btn' + (entry === o[0] ? " selected" : "") +
+                '" data-entry="' + o[0] + '">' + o[1] + '</button>';
+            }).join("") +
+          '</div>' +
+          '<p class="setting-help">' +
+            (entry === "wheel"
+              ? "Tap a number and a wheel slides up. The 123 button on it switches to the keyboard for that one entry."
+              : "Tap a number and the keyboard opens, the way it did before.") +
+          '</p>' +
         '</div>' +
 
         '<div class="setting-block">' +
@@ -638,7 +693,7 @@ import { loadState, saveState } from "./store.js";
 
     var equipInput = el.querySelector("#set-equip");
     el.querySelector("[data-add-equip]").addEventListener("click", function () {
-      var v = (equipInput.value || "").trim();
+      var v = titleCase(equipInput.value);
       if (!v) return;
       var taken = equipmentList().filter(function (x) {
         return x.toLowerCase() === v.toLowerCase();
@@ -647,6 +702,26 @@ import { loadState, saveState } from "./store.js";
       state.settings.customEquipment.push(v);
       persist();
       renderSettings();
+      refreshEquipmentRails(null);
+    });
+    el.querySelectorAll("[data-hide-equip]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var name = btn.getAttribute("data-hide-equip");
+        var off = state.settings.hiddenEquipment;
+        var at = off.indexOf(name);
+        if (at === -1) off.push(name); else off.splice(at, 1);
+        persist();
+        renderSettings();
+        refreshEquipmentRails(at === -1 ? name : null);
+      });
+    });
+    el.querySelectorAll("[data-entry]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        state.settings.numberEntry = btn.getAttribute("data-entry");
+        persist();
+        renderSettings();
+        refreshEquipmentRails(null);   // the inputs change with the mode too
+      });
     });
     el.querySelectorAll("[data-del-equip]").forEach(function (btn) {
       btn.addEventListener("click", function () {
@@ -656,6 +731,7 @@ import { loadState, saveState } from "./store.js";
         });
         persist();
         renderSettings();
+        refreshEquipmentRails(name);
       });
     });
 
@@ -1394,11 +1470,12 @@ import { loadState, saveState } from "./store.js";
               '<input type="number" inputmode="numeric" class="dur-s" placeholder="s" value="' + esc(p.s) + '">' +
             '</span>';
         } else {
-          firstCell = '<input type="number" inputmode="numeric" placeholder="Reps" class="set-v1" value="' +
-            esc(s.reps == null ? "" : s.reps) + '">';
+          firstCell = '<input type="number" inputmode="numeric" placeholder="Reps" class="set-v1"' +
+            wheelAttrs("reps") + ' value="' + esc(s.reps == null ? "" : s.reps) + '">';
         }
         var weightCells = noWt ? "" :
-          '<input type="number" inputmode="decimal" placeholder="' + cfg.col2 + '" class="set-v2" value="' + esc(v2) + '">' +
+          '<input type="number" inputmode="decimal" placeholder="' + cfg.col2 + '" class="set-v2"' +
+            (metric === "distance" ? "" : wheelAttrs("weight")) + ' value="' + esc(v2) + '">' +
           '<button class="unit-toggle" data-unit-toggle>' + (s[unitKey] || cfg.units[0]) + '</button>';
         return '' +
           '<div class="set-row' + (dur ? " has-duration" : "") + (noWt ? " no-weight" : "") +
@@ -1436,12 +1513,15 @@ import { loadState, saveState } from "./store.js";
                 '" data-metric="' + i + ':' + m + '">' + METRICS[m].label + '</button>';
             }).join("") +
           '</div>' +
-          '<div class="equip-scroll">' +
-            equipmentList().map(function (eq) {
-              return '<button class="equip-btn' + (blk.equipment === eq ? " selected" : "") +
-                '" data-equip="' + i + ':' + esc(eq) + '">' + esc(eq) + '</button>';
-            }).join("") +
-          '</div>' +
+          (usesEquipment(metric)
+            ? '<div class="equip-scroll">' +
+                equipmentList().map(function (eq) {
+                  return '<button class="equip-btn' + (blk.equipment === eq ? " selected" : "") +
+                    '" data-equip="' + i + ':' + esc(eq) + '">' + esc(eq) + '</button>';
+                }).join("") +
+                '<button class="equip-btn is-add" data-equip-add="' + i + '">+ Add</button>' +
+              '</div>'
+            : "") +
           '<div class="set-head' + (dur ? " has-duration" : "") + (noWt ? " no-weight" : "") + '"><span></span>' +
             (dur
               ? '<span class="dur-head"><span>Hr</span><span>Min</span><span>Sec</span></span>'
@@ -1498,7 +1578,9 @@ import { loadState, saveState } from "./store.js";
     containerEl.querySelectorAll("[data-metric]").forEach(function (btn) {
       btn.addEventListener("click", function () {
         var parts = btn.getAttribute("data-metric").split(":");
-        draftObj.exercises[Number(parts[0])].metric = parts[1];
+        var blk = draftObj.exercises[Number(parts[0])];
+        blk.metric = parts[1];
+        if (!usesEquipment(blk.metric)) blk.equipment = null;
         rerender();
       });
     });
@@ -1524,6 +1606,47 @@ import { loadState, saveState } from "./store.js";
       });
     });
 
+    // add one without leaving the set you are logging
+    containerEl.querySelectorAll("[data-equip-add]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var blk = draftObj.exercises[Number(btn.getAttribute("data-equip-add"))];
+        var input = document.createElement("input");
+        input.type = "text";
+        input.className = "equip-new";
+        input.placeholder = "Name it";
+        btn.parentNode.replaceChild(input, btn);
+        input.focus();
+        var done = false;
+        var finish = function () {
+          if (done) return;
+          done = true;
+          var v = titleCase(input.value);
+          if (v) {
+            var taken = equipmentList(true).filter(function (x) {
+              return x.toLowerCase() === v.toLowerCase();
+            })[0];
+            if (taken) {
+              // already exists, possibly hidden -- bring it back rather than
+              // quietly making a second one with the same name
+              state.settings.hiddenEquipment = state.settings.hiddenEquipment.filter(function (x) {
+                return x !== taken;
+              });
+              blk.equipment = taken;
+            } else {
+              state.settings.customEquipment.push(v);
+              blk.equipment = v;
+            }
+            persist();
+          }
+          setTimeout(rerender, 0);
+        };
+        input.addEventListener("blur", finish);
+        input.addEventListener("keydown", function (e) {
+          if (e.key === "Enter") { e.preventDefault(); input.blur(); }
+        });
+      });
+    });
+
     // renaming reaches the catalogue entry, so every session using it follows
     containerEl.querySelectorAll("[data-rename]").forEach(function (head) {
       head.addEventListener("click", function () {
@@ -1541,7 +1664,7 @@ import { loadState, saveState } from "./store.js";
         var finish = function () {
           if (done) return;
           done = true;
-          var v = input.value.trim();
+          var v = titleCase(input.value);
           if (v && v !== exObj.name) {
             var clash = state.exercises.filter(function (e) {
               return e.id !== exObj.id && e.name.toLowerCase() === v.toLowerCase();
@@ -1620,7 +1743,11 @@ import { loadState, saveState } from "./store.js";
           setObj.reps = raw === "" ? null : Number(raw);
         });
       }
+      var v1El = row.querySelector(".set-v1");
+      if (v1El) wireWheel(v1El, setObj, "reps", cfg, metric);
+
       var v2El = row.querySelector(".set-v2");          // absent on bodyweight
+      if (v2El) wireWheel(v2El, setObj, "weight", cfg, metric);
       if (v2El) {
         v2El.addEventListener("input", function (e) {
           var raw = e.target.value;
@@ -1869,7 +1996,8 @@ import { loadState, saveState } from "./store.js";
   }
 
   /* Adds to your catalogue -- your "inventory" -- then picks it. */
-  function createExerciseFrom(name) {
+  function createExerciseFrom(raw) {
+    var name = titleCase(raw);
     if (!name) return;
     var existing = state.exercises.filter(function (e) {
       return e.name.toLowerCase() === name.toLowerCase();
@@ -2250,6 +2378,129 @@ import { loadState, saveState } from "./store.js";
       persist();
     });
   })();
+
+  /* ----------------------------- the wheel ----------------------------- */
+
+  /* A scrolling column instead of a keypad. The numbers you actually use are
+     a flick away, and nothing covers half the screen. 123 on the sheet hands
+     that one entry back to the keyboard. */
+
+  var WHEEL_ITEM = 40;   // must match .wheel-item in the stylesheet
+
+  function wheelMode() { return (state.settings.numberEntry || "wheel") === "wheel"; }
+
+  /* readonly is what stops iOS opening the keyboard on tap. */
+  function wheelAttrs(kind) { return wheelMode() ? ' readonly data-wheel="' + kind + '"' : ""; }
+
+  function wheelValues(kind, unit) {
+    var out = [], i;
+    if (kind === "reps") {
+      for (i = 1; i <= 60; i++) out.push(i);
+      return out;
+    }
+    var step = unit === "kg" ? 1.25 : 2.5;
+    var max = unit === "kg" ? 300 : 600;
+    for (i = 0; i * step <= max; i++) out.push(Math.round(i * step * 100) / 100);
+    return out;
+  }
+
+  function nearestIndex(vals, v) {
+    if (v == null || v === "") return kindDefaultIndex(vals);
+    var best = 0, diff = Infinity;
+    vals.forEach(function (x, i) {
+      var d = Math.abs(x - v);
+      if (d < diff) { diff = d; best = i; }
+    });
+    return best;
+  }
+
+  /* Opening on 1 or 0 means a long flick every time; start somewhere usable. */
+  function kindDefaultIndex(vals) {
+    return vals.length > 40 ? Math.min(vals.length - 1, 12) : Math.min(vals.length - 1, 7);
+  }
+
+  var wheel = { input: null, setObj: null, kind: null, vals: [], idx: 0 };
+
+  function openWheel(input, setObj, kind, cfg, metric) {
+    var unit = setObj[cfg.unitKey] || cfg.units[0];
+    var vals = wheelValues(kind, unit);
+    var cur = kind === "reps" ? setObj.reps : setObj.weight;
+    wheel = { input: input, setObj: setObj, kind: kind, vals: vals, idx: nearestIndex(vals, cur) };
+
+    document.getElementById("wheel-title").textContent =
+      kind === "reps" ? "Reps" : "Weight (" + unit + ")";
+
+    var col = document.getElementById("wheel-col");
+    col.innerHTML = vals.map(function (v) {
+      return '<div class="wheel-item">' + v + '</div>';
+    }).join("");
+    document.getElementById("wheel-modal-overlay").classList.add("open");
+    // after the sheet is on screen, or scrollTop lands on a hidden element
+    requestAnimationFrame(function () {
+      col.scrollTop = wheel.idx * WHEEL_ITEM;
+      markWheel();
+    });
+  }
+
+  function closeWheel() {
+    document.getElementById("wheel-modal-overlay").classList.remove("open");
+    wheel.input = null;
+  }
+
+  function markWheel() {
+    var col = document.getElementById("wheel-col");
+    var i = Math.max(0, Math.min(wheel.vals.length - 1, Math.round(col.scrollTop / WHEEL_ITEM)));
+    if (i === wheel.idx && col.querySelector(".wheel-item.on")) return;
+    var was = wheel.idx;
+    wheel.idx = i;
+    var items = col.children;
+    if (items[was]) items[was].classList.remove("on");
+    if (items[i]) items[i].classList.add("on");
+    if (was !== i) commitWheel();
+  }
+
+  function commitWheel() {
+    if (!wheel.input) return;
+    var v = wheel.vals[wheel.idx];
+    if (wheel.kind === "reps") wheel.setObj.reps = v;
+    else wheel.setObj.weight = v;
+    wheel.input.value = v;
+  }
+
+  (function wireWheelSheet() {
+    var col = document.getElementById("wheel-col");
+    col.addEventListener("scroll", function () {
+      clearTimeout(wireWheelSheet._h);
+      wireWheelSheet._h = setTimeout(markWheel, 60);
+    });
+    document.getElementById("wheel-done").addEventListener("click", function () {
+      commitWheel();
+      closeWheel();
+    });
+    document.getElementById("wheel-type").addEventListener("click", function () {
+      var input = wheel.input;
+      closeWheel();
+      if (!input) return;
+      // hand this one entry to the keyboard, then put the wheel back
+      input.removeAttribute("readonly");
+      input.focus();
+      input.select();
+      input.addEventListener("blur", function restore() {
+        input.removeEventListener("blur", restore);
+        input.setAttribute("readonly", "readonly");
+      });
+    });
+    document.getElementById("wheel-modal-overlay").addEventListener("click", function (e) {
+      if (e.target.id === "wheel-modal-overlay") { commitWheel(); closeWheel(); }
+    });
+  })();
+
+  function wireWheel(input, setObj, kind, cfg, metric) {
+    if (!input.hasAttribute("data-wheel")) return;
+    input.addEventListener("click", function () {
+      if (input.hasAttribute("readonly")) openWheel(input, setObj, kind, cfg, metric);
+    });
+  }
 
   /* ----------------------------- keyboard ----------------------------- */
 
