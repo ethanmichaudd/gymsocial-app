@@ -819,3 +819,6 @@
   }
 
   .note-input { resize: none; overflow: hidden; line-height: 1.45; display: block; }
+
+  /* the tab bar gives up its space while the keyboard is open */
+  body.kb-open .tabbar { display: none; }

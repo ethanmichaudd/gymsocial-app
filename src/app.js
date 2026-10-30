@@ -1361,6 +1361,11 @@ import { loadState, saveState } from "./store.js";
     }
     var ssLabels = supersetLabels(draftObj.exercises);
 
+    /* Re-rendering throws away the equipment rails, and with them how far
+       each one was scrolled. Remember, rebuild, put them back. */
+    var railScroll = [].map.call(containerEl.querySelectorAll(".equip-scroll"),
+      function (r) { return r.scrollLeft; });
+
     containerEl.innerHTML = draftObj.exercises.map(function (blk, i) {
       var exObj = findExercise(blk.exerciseId);
       var metric = metricOf(blk);
@@ -1452,6 +1457,13 @@ import { loadState, saveState } from "./store.js";
         '</div>';
     }).join("");
 
+    containerEl.querySelectorAll(".equip-scroll").forEach(function (rail, i) {
+      if (railScroll[i] != null) { rail.scrollLeft = railScroll[i]; return; }
+      // first render of this block: bring whatever is already chosen into view
+      var sel = rail.querySelector(".equip-btn.selected");
+      if (sel) rail.scrollLeft = sel.offsetLeft - (rail.clientWidth - sel.offsetWidth) / 2;
+    });
+
     containerEl.querySelectorAll("[data-remove-ex]").forEach(function (btn) {
       btn.addEventListener("click", function () {
         draftObj.exercises.splice(Number(btn.getAttribute("data-remove-ex")), 1);
@@ -1498,7 +1510,16 @@ import { loadState, saveState } from "./store.js";
         var cut = raw.indexOf(":");                 // a custom name may contain one
         var blk = draftObj.exercises[Number(raw.slice(0, cut))];
         var eq = raw.slice(cut + 1);
+        var hadWeightBox = !dropsWeight(blk, metricOf(blk));
         blk.equipment = blk.equipment === eq ? null : eq;   // tap again to clear
+        var hasWeightBox = !dropsWeight(blk, metricOf(blk));
+        if (hasWeightBox === hadWeightBox) {
+          // the sets look the same either way -- just move the highlight, so
+          // the rail keeps both its scroll position and your place in it
+          [].forEach.call(btn.parentNode.children, function (b) { b.classList.remove("selected"); });
+          if (blk.equipment) btn.classList.add("selected");
+          return;
+        }
         rerender();
       });
     });
@@ -2227,6 +2248,47 @@ import { loadState, saveState } from "./store.js";
       note.hidden = true;
       state.settings.hideStorageNote = true;
       persist();
+    });
+  })();
+
+  /* ----------------------------- keyboard ----------------------------- */
+
+  /* The app frame is position:fixed, and iOS does not shrink the layout
+     viewport when the keyboard opens -- so the bottom of the app, including
+     whatever you are typing in, ends up underneath it. visualViewport is the
+     only thing that reports the covered height, so the frame is resized by
+     hand and the field is scrolled back into view. */
+  (function keyboardAware() {
+    var vv = window.visualViewport;
+    if (!vv) return;
+    var frame = document.querySelector(".app-frame");
+
+    function apply() {
+      if (getComputedStyle(frame).position !== "fixed") {  // wide screens
+        frame.style.bottom = "";
+        document.body.classList.remove("kb-open");
+        return;
+      }
+      var covered = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+      frame.style.bottom = covered + "px";
+      // a tab bar pinned above the keyboard is just wasted room
+      document.body.classList.toggle("kb-open", covered > 80);
+    }
+
+    vv.addEventListener("resize", apply);
+    vv.addEventListener("scroll", apply);
+    window.addEventListener("orientationchange", function () { setTimeout(apply, 300); });
+    apply();
+
+    document.addEventListener("focusin", function (e) {
+      var el = e.target;
+      if (!/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) return;
+      // after the keyboard animation, so the frame has already been resized
+      setTimeout(function () {
+        if (document.activeElement === el && el.scrollIntoView) {
+          el.scrollIntoView({ block: "center" });
+        }
+      }, 300);
     });
   })();
 
