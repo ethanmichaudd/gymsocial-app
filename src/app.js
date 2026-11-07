@@ -134,7 +134,15 @@ import { loadState, saveState } from "./store.js";
   var DEMO_PRIVATE_HANDLES = { pnair: true };
 
   /* Bump when saved data needs actively repairing, not just back-filling. */
-  var SCHEMA_VERSION = 3;
+  var SCHEMA_VERSION = 5;
+
+  /* A stand-in friend so the Friends section can be seen before accounts
+     exist. Settings can remove it, and real accounts replace it. */
+  var DEMO_FRIEND_ID = "demo_friend";
+  var DEMO_FRIEND_2_ID = "demo_friend_2";
+
+  /* Four is enough to say something without turning into a keyboard. */
+  var REACTIONS = ["\uD83D\uDCAA", "\uD83D\uDD25", "\uD83D\uDC4F", "\uD83D\uDE4C"];
 
   var EXERCISE_CATEGORIES = {
     "Barbell Bench Press": "push", "Incline Dumbbell Press": "push", "Overhead Press": "push",
@@ -164,7 +172,7 @@ import { loadState, saveState } from "./store.js";
 
     var me = { id: "me", name: "You", handle: "you", isPrivate: false };
 
-    return {
+    var fresh = {
       me: me,
       users: [me],
       connections: [],
@@ -175,10 +183,13 @@ import { loadState, saveState } from "./store.js";
       workouts: [],
       settings: {
         weeklyGoal: 3, streakMode: "weekly", customCount: 4, customDays: 10,
-        customEquipment: [], hiddenEquipment: [], numberEntry: "wheel",
+        customEquipment: [], hiddenEquipment: [], theme: "light",
         schemaVersion: SCHEMA_VERSION
       }
     };
+    addDemoFriend(fresh);      // so the Friends page has something in it
+    addDemoFriend2(fresh);
+    return fresh;
   }
 
   /* ----------------------------- state / persistence ----------------------------- */
@@ -200,7 +211,12 @@ import { loadState, saveState } from "./store.js";
     if (s.settings.customDays == null) s.settings.customDays = 10;
     if (!s.settings.customEquipment) s.settings.customEquipment = [];
     if (!s.settings.hiddenEquipment) s.settings.hiddenEquipment = [];
-    if (!s.settings.numberEntry) s.settings.numberEntry = "wheel";
+    if (!s.settings.theme) s.settings.theme = "light";
+    (s.gyms || []).forEach(function (g) {
+      if (g.street == null) g.street = "";
+      if (g.city == null) g.city = "";
+      if (g.state == null) g.state = "";
+    });
     (s.exercises || []).forEach(function (e) {
       if (!e.category) e.category = EXERCISE_CATEGORIES[e.name] || "other";
       if (!e.metric) e.metric = DEFAULT_METRIC[e.name] || "reps";
@@ -231,6 +247,15 @@ import { loadState, saveState } from "./store.js";
       });
     }
     if (!s.connectionRequests) s.connectionRequests = [];
+    if ((s.settings.schemaVersion || 1) < 4) {
+      addDemoFriend(s);
+      s.settings.schemaVersion = 4;
+    }
+    if ((s.settings.schemaVersion || 1) < 5) {
+      if ((s.users || []).some(function (u) { return u.id === DEMO_FRIEND_ID; })) addDemoFriend2(s);
+      s.settings.schemaVersion = 5;
+    }
+    (s.workouts || []).forEach(function (w) { if (!w.reactions) w.reactions = {}; });
     s.settings.schemaVersion = SCHEMA_VERSION;
     // state.me and its row in state.users are the same object in a fresh seed
     // but separate objects after a JSON round-trip -- resync them.
@@ -239,12 +264,214 @@ import { loadState, saveState } from "./store.js";
     return s;
   }
 
+  /* Builds today's session for the stand-in friend. Dated at run time so it
+     is always "today" whenever the app is first opened after the update. */
+  function addDemoFriend(s) {
+    if ((s.users || []).some(function (u) { return u.id === DEMO_FRIEND_ID; })) return;
+
+    var byName = {};
+    (s.exercises || []).forEach(function (e) { byName[e.name] = e.id; });
+    var plan = [
+      ["Barbell Bench Press", "Barbell", [[8, 165], [8, 175], [6, 185]]],
+      ["Incline Dumbbell Press", "Dumbbell", [[10, 60], [10, 60], [8, 65]]],
+      ["Lateral Raise", "Dumbbell", [[15, 20], [15, 20], [12, 25]]],
+      ["Tricep Pushdown", "Cable", [[12, 50], [12, 55], [10, 60]]]
+    ].filter(function (row) { return byName[row[0]]; });
+    if (!plan.length) return;
+
+    var start = new Date();
+    start.setHours(7, 15, 0, 0);
+    var end = new Date(start.getTime() + 58 * 60 * 1000);
+
+    s.users = s.users || [];
+    s.users.push({ id: DEMO_FRIEND_ID, name: "Maya Jensen", handle: "mayaj", isPrivate: false });
+    s.follows = s.follows || [];
+    s.follows.push([s.me.id, DEMO_FRIEND_ID]);
+
+    s.workouts = s.workouts || [];
+    s.workouts.push({
+      id: "demo_wk_1",
+      userId: DEMO_FRIEND_ID,
+      userName: "Maya Jensen",
+      gymId: null,
+      title: "Push Day",
+      performedAt: start.toISOString(),
+      endedAt: end.toISOString(),
+      calories: 430,
+      exercises: plan.map(function (row) {
+        return {
+          exerciseId: byName[row[0]],
+          metric: "reps",
+          equipment: row[1],
+          sets: row[2].map(function (st) {
+            return { reps: st[0], seconds: null, weight: st[1], distance: null,
+                     unit: "lb", distUnit: "mi" };
+          })
+        };
+      })
+    });
+  }
+
+  /* Who reacted with what. Stored on the workout, keyed by emoji, so a
+     reaction travels with the session it belongs to. */
+  function reactionsOf(wk) {
+    if (!wk.reactions) wk.reactions = {};
+    return wk.reactions;
+  }
+
+  function reactionCount(wk, emoji) {
+    return (reactionsOf(wk)[emoji] || []).length;
+  }
+
+  function iReacted(wk, emoji) {
+    return (reactionsOf(wk)[emoji] || []).indexOf(state.me.id) !== -1;
+  }
+
+  /* Which one you picked, if any -- there is only ever one. */
+  function myReaction(wk) {
+    var all = reactionsOf(wk);
+    for (var e in all) {
+      if (all[e].indexOf(state.me.id) !== -1) return e;
+    }
+    return null;
+  }
+
+  /* One reaction per person per session: picking another moves yours rather
+     than adding a second, and picking the one you already chose clears it. */
+  function toggleReaction(wk, emoji) {
+    var all = reactionsOf(wk);
+    var had = myReaction(wk);
+
+    if (had) {
+      all[had] = all[had].filter(function (id) { return id !== state.me.id; });
+      if (!all[had].length) delete all[had];
+    }
+    if (had !== emoji) {
+      (all[emoji] = all[emoji] || []).push(state.me.id);
+      buzz(12);
+    }
+    persist();
+  }
+
+  function reactionBarHtml(wk) {
+    return '<div class="react-bar">' + REACTIONS.map(function (e) {
+      var n = reactionCount(wk, e);
+      return '<button class="react' + (iReacted(wk, e) ? " is-mine" : "") +
+        '" data-react="' + wk.id + '|' + e + '">' + e +
+        (n ? '<span class="react-n">' + n + '</span>' : '') + '</button>';
+    }).join("") + '</div>';
+  }
+
+  /* One handler for every reaction button inside a container. */
+  function wireReactions(root, after) {
+    root.querySelectorAll("[data-react]").forEach(function (btn) {
+      btn.addEventListener("click", function (e) {
+        e.stopPropagation();          // reacting is not opening the workout
+        var parts = btn.getAttribute("data-react").split("|");
+        var wk = state.workouts.filter(function (w) { return w.id === parts[0]; })[0];
+        if (!wk) return;
+        toggleReaction(wk, parts[1]);
+        after();
+      });
+    });
+  }
+
+  function addDemoFriend2(s) {
+    if ((s.users || []).some(function (u) { return u.id === DEMO_FRIEND_2_ID; })) return;
+
+    var byName = {};
+    (s.exercises || []).forEach(function (e) { byName[e.name] = e.id; });
+    var plan = [
+      ["Back Squat", "Barbell", [[5, 225], [5, 245], [3, 265]]],
+      ["Romanian Deadlift", "Barbell", [[8, 185], [8, 195]]],
+      ["Leg Press", "Machine", [[12, 320], [12, 360]]]
+    ].filter(function (row) { return byName[row[0]]; });
+    if (!plan.length) return;
+
+    var start = new Date();
+    start.setDate(start.getDate() - 1);
+    start.setHours(18, 5, 0, 0);
+    var end = new Date(start.getTime() + 72 * 60 * 1000);
+
+    s.users.push({ id: DEMO_FRIEND_2_ID, name: "Dev Patel", handle: "devp", isPrivate: false });
+    s.follows = s.follows || [];
+    s.follows.push([s.me.id, DEMO_FRIEND_2_ID]);
+    s.workouts.push({
+      id: "demo_wk_2",
+      userId: DEMO_FRIEND_2_ID,
+      userName: "Dev Patel",
+      gymId: null,
+      title: "Leg Day",
+      performedAt: start.toISOString(),
+      endedAt: end.toISOString(),
+      calories: 520,
+      reactions: {},
+      exercises: plan.map(function (row) {
+        return {
+          exerciseId: byName[row[0]],
+          metric: "reps",
+          equipment: row[1],
+          sets: row[2].map(function (st) {
+            return { reps: st[0], seconds: null, weight: st[1], distance: null,
+                     unit: "lb", distUnit: "mi" };
+          })
+        };
+      })
+    });
+
+    // so the counts on the reaction bar are not all zero to begin with
+    var maya = s.workouts.filter(function (w) { return w.id === "demo_wk_1"; })[0];
+    if (maya) maya.reactions = { "\uD83D\uDD25": [DEMO_FRIEND_2_ID] };
+  }
+
   function persist() {
     saveState(STORAGE_KEY, state);
   }
 
   function findExercise(id) { return state.exercises.filter(function (e) { return e.id === id; })[0]; }
   function findGym(id) { return state.gyms.filter(function (g) { return g.id === id; })[0]; }
+
+  /* Two ways to say the same gym: the short label that goes everywhere a gym
+     is named, and the full address for the screens that have room for it. */
+  function gymPlace(g) {
+    return [g.city, g.state].filter(Boolean).join(", ");
+  }
+
+  function gymBaseLabel(g) {
+    var place = gymPlace(g);
+    return place ? g.name + " - " + place : g.name;
+  }
+
+  /* "100 Liberty St" -> "Liberty St". The number is what you need to walk
+     there; the street is what you need to tell two of them apart. */
+  function streetShort(street) {
+    return String(street || "").replace(/^\s*[\d-]+\s*/, "").trim() || String(street || "");
+  }
+
+  /* Two Planet Fitnesses in Boston read identically everywhere, so when a
+     name and city are shared the street gets appended -- and only then, so
+     the usual case stays short. */
+  function gymLabel(g) {
+    if (!g) return "";
+    var base = gymBaseLabel(g);
+    if (!g.street) return base;
+    var shared = state.gyms.some(function (x) {
+      return x.id !== g.id && gymBaseLabel(x).toLowerCase() === base.toLowerCase();
+    });
+    return shared ? base + " (" + streetShort(g.street) + ")" : base;
+  }
+
+  /* What makes a gym the same gym -- used for the duplicate check, since the
+     label above deliberately differs between two gyms at different streets. */
+  function gymKey(g) {
+    return [g.name, g.street, g.city, g.state]
+      .map(function (v) { return String(v || "").trim().toLowerCase(); }).join("|");
+  }
+
+  function gymAddress(g) {
+    if (!g) return "";
+    return [g.street, gymPlace(g)].filter(Boolean).join(", ");
+  }
   function findUser(id) { return state.users.filter(function (u) { return u.id === id; })[0]; }
 
   /* ----------------------------- your data ----------------------------- */
@@ -256,6 +483,31 @@ import { loadState, saveState } from "./store.js";
   }
 
   function myWorkouts() { return workoutsOf(state.me.id); }
+
+  /* One-way: whose sessions reach your home screen. Mutual connections, which
+     are what unlock a private log, arrive with real accounts. */
+  function friendsOf(userId) {
+    return (state.follows || [])
+      .filter(function (f) { return f[0] === userId; })
+      .map(function (f) { return findUser(f[1]); })
+      .filter(Boolean);
+  }
+
+  /* A photo if there is one, initials if not -- same box either way, so
+     every list that shows people lines up. */
+  function avatarHtml(user, extra) {
+    var cls = "avatar" + (extra ? " " + extra : "");
+    if (user && user.avatar) {
+      return '<span class="' + cls + ' has-photo" style="background-image:url(' +
+        esc(user.avatar) + ')"></span>';
+    }
+    return '<span class="' + cls + '">' + esc(initialsOf(user ? user.name : "?")) + '</span>';
+  }
+
+  function initialsOf(name) {
+    return String(name || "?").trim().split(/\s+/).slice(0, 2)
+      .map(function (w) { return w.charAt(0).toUpperCase(); }).join("");
+  }
 
   /* ---- what you did last time, so logging is a target not a blank form ---- */
 
@@ -391,14 +643,6 @@ import { loadState, saveState } from "./store.js";
       .sort(function (a, b) { return b.sessions - a.sessions; });
   }
 
-  function exerciseCountOf(userId) {
-    var seen = {};
-    workoutsOf(userId).forEach(function (w) {
-      w.exercises.forEach(function (we) { seen[we.exerciseId] = true; });
-    });
-    return Object.keys(seen).length;
-  }
-
   function localDayKey(iso) {
     var d = new Date(iso);
     return d.getFullYear() + "-" + d.getMonth() + "-" + d.getDate();
@@ -423,15 +667,20 @@ import { loadState, saveState } from "./store.js";
     var mode = st.streakMode || "weekly";
     var mine = workoutsOf(userId);
     var out = { mode: mode, current: 0, best: 0, inPeriod: 0, goal: 1, days: 0, total: mine.length };
-    if (!mine.length) return out;
-    if (mode === "daily") return dailyStreak(mine, out);
+
+    // The goal is the goal before the first workout too -- it used to fall
+    // back to 1 here, so a new log read "0 of 1 this week".
     if (mode === "custom") {
       out.goal = st.customCount || 4;
       out.days = st.customDays || 10;
-      return blockStreak(mine, out.goal, out.days, out);
+    } else if (mode === "weekly") {
+      out.goal = st.weeklyGoal || 3;
+      out.days = 7;
     }
-    out.goal = st.weeklyGoal || 3;
-    out.days = 7;
+
+    if (!mine.length) return out;
+    if (mode === "daily") return dailyStreak(mine, out);
+    if (mode === "custom") return blockStreak(mine, out.goal, out.days, out);
     return weeklyStreak(mine, out.goal, out);
   }
 
@@ -524,33 +773,37 @@ import { loadState, saveState } from "./store.js";
 
   var FLAME_SVG = '<svg class="streak-flame" viewBox="0 0 24 24"><path d="M12.5 2c.4 3-1.3 4.6-2.7 6C8.2 9.5 7 11 7 13.4A5.6 5.6 0 0 0 12.6 19a5.4 5.4 0 0 0 5.4-5.5c0-3.4-2.3-5-3.4-7.3-.4.9-1 1.5-1.7 2 .4-2.2-.1-4.6-.4-6.2Z"/></svg>';
 
-  function renderStreak(userId, isMe) {
-    var s = computeStreak(userId);
-    var el = document.getElementById("streak-card");
-    var cold = s.current === 0;
-    var unit = s.mode === "daily" ? "day" : s.mode === "weekly" ? "week" : "block";
-    var headline = cold
-      ? (isMe ? "No streak yet" : "No active streak")
-      : s.current + " " + unit + (s.current === 1 ? "" : "s") + " in a row";
+  function streakUnit(mode) {
+    return mode === "daily" ? "day" : mode === "weekly" ? "week" : "block";
+  }
 
-    var sub;
+  /* The streak is a number now -- it lives in the third tile. What a card
+     used to say in a sentence, this says in one line and a bar: where you
+     are against the goal you set. It stays one line however long you train,
+     which a growing list of counters would not. */
+  function renderGoalBar(userId) {
+    var s = computeStreak(userId);
+    var el = document.getElementById("goal-bar");
+    var best = s.best > 0
+      ? '<span class="goal-best">Best ' + s.best + ' ' + streakUnit(s.mode) +
+        (s.best === 1 ? "" : "s") + '</span>'
+      : "";
+
     if (s.mode === "daily") {
-      sub = (s.inPeriod ? "Trained today" : "Nothing logged today yet") +
-        (s.best > 0 ? ' &middot; best <span class="num">' + s.best + "</span>" : "");
-    } else {
-      var window = s.mode === "weekly" ? "this week" : "in the last " + s.days + " days";
-      sub = '<span class="num">' + s.inPeriod + '</span> of <span class="num">' + s.goal + "</span> " + window +
-        (s.best > 0 ? ' &middot; best <span class="num">' + s.best + "</span>" : "");
+      el.innerHTML = '<div class="goal-line"><span>' +
+        (s.inPeriod ? "Logged today." : "Nothing logged today yet.") + '</span>' + best + '</div>';
+      return;
     }
 
+    var pct = Math.max(0, Math.min(100, Math.round((s.inPeriod / s.goal) * 100)));
+    var when = s.mode === "weekly" ? "this week" : "in the last " + s.days + " days";
     el.innerHTML =
-      '<div class="streak-card">' +
-        FLAME_SVG.replace("streak-flame", "streak-flame" + (cold ? " cold" : "")) +
-        '<div class="streak-body">' +
-          '<div class="streak-headline">' + headline + '</div>' +
-          '<div class="streak-sub">' + sub + '</div>' +
-        '</div>' +
-      '</div>';
+      '<div class="goal-line">' +
+        '<span><strong class="num">' + s.inPeriod + '</strong> of <strong class="num">' + s.goal +
+          '</strong> ' + when + '</span>' + best +
+      '</div>' +
+      '<div class="goal-track"><div class="goal-fill' + (pct >= 100 ? " is-done" : "") +
+        '" style="width:' + pct + '%"></div></div>';
   }
 
   /* ----------------------------- settings ----------------------------- */
@@ -579,10 +832,56 @@ import { loadState, saveState } from "./store.js";
     if (document.getElementById("edit-modal-overlay").classList.contains("open")) renderEditModal();
   }
 
+  /* Your identity lives in two places once state has been through storage. */
+  function updateMe(field, value) {
+    state.me[field] = value;
+    var mirror = findUser(state.me.id);
+    if (mirror) mirror[field] = value;
+    persist();
+  }
+
+  /* Square-cropped and scaled down before it is stored: a phone photo
+     straight from the camera would be megabytes, and browser storage is
+     a few. 256px is plenty for a 46px circle on a retina screen. */
+  function setAvatarFromFile(file) {
+    if (!file) return;
+    var reader = new FileReader();
+    reader.onerror = function () { showToast("Couldn't read that image."); };
+    reader.onload = function () {
+      var img = new Image();
+      img.onerror = function () { showToast("That file isn't an image."); };
+      img.onload = function () {
+        var size = 256;
+        var side = Math.min(img.width, img.height);
+        var canvas = document.createElement("canvas");
+        canvas.width = canvas.height = size;
+        canvas.getContext("2d").drawImage(
+          img, (img.width - side) / 2, (img.height - side) / 2, side, side, 0, 0, size, size);
+        var data;
+        try { data = canvas.toDataURL("image/jpeg", 0.82); }
+        catch (e) { showToast("Couldn't read that image."); return; }
+        updateMe("avatar", data);
+        renderSettings();
+        renderHome();
+        showToast("Photo updated.");
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  }
+
+  var settingsTab = "profile";
+
   function renderSettings() {
     var el = document.getElementById("settings-body");
     var st = state.settings;
     var mode = st.streakMode;
+
+    document.querySelectorAll("[data-settings-tab]").forEach(function (b) {
+      b.classList.toggle("selected", b.getAttribute("data-settings-tab") === settingsTab);
+    });
+
+    if (settingsTab === "profile") { renderProfileSettings(el); return; }
 
     var params = "";
     if (mode === "weekly") {
@@ -593,7 +892,7 @@ import { loadState, saveState } from "./store.js";
     }
 
     var hidden = st.hiddenEquipment || [];
-    var entry = st.numberEntry || "wheel";
+    var theme = st.theme === "dark" ? "dark" : "light";
 
     var modeHelp = {
       weekly: "Counts Sunday-Saturday weeks that hit your target. Rest days never break it.",
@@ -603,11 +902,6 @@ import { loadState, saveState } from "./store.js";
 
     el.innerHTML =
       '<div>' +
-        '<div class="setting-block">' +
-          '<label class="field-label" for="set-name">Display name</label>' +
-          '<input type="text" id="set-name" value="' + esc(state.me.name) + '" placeholder="Your name">' +
-        '</div>' +
-
         '<div class="setting-block">' +
           '<label class="field-label">Backup</label>' +
           '<div class="action-row" style="margin-bottom:0;">' +
@@ -637,18 +931,21 @@ import { loadState, saveState } from "./store.js";
         '</div>' +
 
         '<div class="setting-block">' +
-          '<label class="field-label">Entering reps and weight</label>' +
+          '<label class="field-label">Appearance</label>' +
           '<div class="segmented">' +
-            [["wheel", "Wheel"], ["keyboard", "Keyboard"]].map(function (o) {
-              return '<button class="seg-btn' + (entry === o[0] ? " selected" : "") +
-                '" data-entry="' + o[0] + '">' + o[1] + '</button>';
+            [["light", "Light"], ["dark", "Dark"]].map(function (o) {
+              return '<button class="seg-btn' + (theme === o[0] ? " selected" : "") +
+                '" data-theme-set="' + o[0] + '">' + o[1] + '</button>';
             }).join("") +
           '</div>' +
-          '<p class="setting-help">' +
-            (entry === "wheel"
-              ? "Tap a number and a wheel slides up. The 123 button on it switches to the keyboard for that one entry."
-              : "Tap a number and the keyboard opens, the way it did before.") +
-          '</p>' +
+        '</div>' +
+
+        '<div class="setting-block">' +
+          '<label class="field-label">Danger zone</label>' +
+          '<button class="btn btn-ghost btn-block" id="reset-demo-btn" ' +
+            'style="color:var(--danger);border-color:var(--danger);">Erase all my data</button>' +
+          '<p class="setting-help">Deletes every workout, gym and exercise in this browser. ' +
+            'Export a backup first.</p>' +
         '</div>' +
 
         '<div class="setting-block">' +
@@ -664,26 +961,7 @@ import { loadState, saveState } from "./store.js";
         '</div>' +
       '</div>';
 
-    /* Your identity lives in two places once state has been through storage. */
-    function updateMe(field, value) {
-      state.me[field] = value;
-      var mirror = findUser(state.me.id);
-      if (mirror) mirror[field] = value;
-      persist();
-    }
-    /* These fire on blur, so re-rendering the whole settings card here would
-       tear out the input mid-event. Update just what the name touches. */
-    el.querySelector("#set-name").addEventListener("change", function (e) {
-      var v = e.target.value.trim();
-      if (!v) { e.target.value = state.me.name; return; }
-      updateMe("name", v);
-      // Workouts carry a copy of the name, so bring old sessions along.
-      state.workouts.forEach(function (w) { if (w.userId === state.me.id) w.userName = v; });
-      persist();
-      // Only the greeting depends on the name -- re-rendering Home from here
-      // would tear out this input mid-blur.
-      document.getElementById("home-greeting").textContent = v.split(" ")[0] + "'s Training";
-    });
+    wireEraseButton(el);
     el.querySelectorAll("[data-backup]").forEach(function (btn) {
       btn.addEventListener("click", function () {
         if (btn.getAttribute("data-backup") === "export") openExportSheet();
@@ -715,12 +993,12 @@ import { loadState, saveState } from "./store.js";
         refreshEquipmentRails(at === -1 ? name : null);
       });
     });
-    el.querySelectorAll("[data-entry]").forEach(function (btn) {
+    el.querySelectorAll("[data-theme-set]").forEach(function (btn) {
       btn.addEventListener("click", function () {
-        state.settings.numberEntry = btn.getAttribute("data-entry");
+        state.settings.theme = btn.getAttribute("data-theme-set");
         persist();
+        applyTheme();
         renderSettings();
-        refreshEquipmentRails(null);   // the inputs change with the mode too
       });
     });
     el.querySelectorAll("[data-del-equip]").forEach(function (btn) {
@@ -757,6 +1035,111 @@ import { loadState, saveState } from "./store.js";
       });
     });
   }
+
+  /* Who you are, and the handful of numbers that describe your training as
+     a whole rather than this week. */
+  function renderProfileSettings(el) {
+    var me = state.me;
+    var mine = myWorkouts();
+    var streak = computeStreak(me.id);
+    var first = mine.slice().sort(function (a, b) {
+      return new Date(a.performedAt) - new Date(b.performedAt);
+    })[0];
+
+    var tiles = [
+      { value: mine.length, label: mine.length === 1 ? "Workout" : "Workouts" },
+      { value: gymsOf(me.id).length, label: "Gyms" },
+      { value: streak.best, label: "Best streak" },
+      { value: first ? shortDate(first.performedAt) : "--", label: "First logged" }
+    ];
+
+    el.innerHTML =
+      '<div class="profile-card">' +
+        avatarHtml(me, "is-big") +
+        '<div class="profile-name">' + esc(me.name) + '</div>' +
+        '<div class="profile-actions">' +
+          '<button class="btn btn-ghost" id="pick-photo">' +
+            (me.avatar ? "Change photo" : "Add photo") + '</button>' +
+          (me.avatar ? '<button class="btn btn-ghost" id="drop-photo">Remove</button>' : '') +
+        '</div>' +
+      '</div>' +
+
+      '<div class="setting-block">' +
+        '<label class="field-label" for="set-name">Display name</label>' +
+        '<input type="text" id="set-name" value="' + esc(me.name) + '" placeholder="Your name">' +
+        '<p class="setting-help">Shown on your sessions, and to friends once accounts are in.</p>' +
+      '</div>' +
+
+      '<div class="setting-block">' +
+        '<label class="field-label">All time</label>' +
+        '<div class="stat-grid" style="grid-template-columns:repeat(2,1fr);margin-bottom:0;">' +
+          tiles.map(function (t) {
+            return '<div class="stat-tile"><span class="num">' + esc(String(t.value)) +
+              '</span><span class="label">' + esc(t.label) + '</span></div>';
+          }).join("") +
+        '</div>' +
+      '</div>';
+
+    var fileInput = document.getElementById("avatar-input");
+    el.querySelector("#pick-photo").addEventListener("click", function () { fileInput.click(); });
+    var drop = el.querySelector("#drop-photo");
+    if (drop) {
+      drop.addEventListener("click", function () {
+        updateMe("avatar", null);
+        renderSettings();
+        renderHome();
+      });
+    }
+
+    /* Fires on blur, so re-rendering here would tear the input out
+       mid-event -- only the greeting depends on the name. */
+    el.querySelector("#set-name").addEventListener("change", function (e) {
+      var v = titleCase(e.target.value);
+      if (!v) { e.target.value = state.me.name; return; }
+      updateMe("name", v);
+      state.workouts.forEach(function (w) { if (w.userId === state.me.id) w.userName = v; });
+      persist();
+      e.target.value = v;
+      el.querySelector(".profile-name").textContent = v;
+      document.getElementById("home-greeting").textContent = v.split(" ")[0] + "'s Training";
+    });
+  }
+
+  function wireEraseButton(el) {
+    var btn = el.querySelector("#reset-demo-btn");
+    if (!btn) return;
+    btn.addEventListener("click", function () {
+      var n = state.workouts.filter(function (w) { return w.userId === state.me.id; }).length;
+      openConfirm({
+        title: "Erase everything?",
+        body: "This deletes " + n + (n === 1 ? " workout" : " workouts") +
+          ", your gyms and your exercises. It cannot be undone -- export a backup first.",
+        confirmLabel: "Erase everything",
+        onConfirm: function () {
+          state = seedState();
+          selectedExerciseId = null;
+          calendarMonth = null;
+          resetDraft();
+          persist();
+          applyTheme();
+          activateTab("home");
+          showToast("Everything erased.");
+        }
+      });
+    });
+  }
+
+  document.getElementById("avatar-input").addEventListener("change", function (e) {
+    setAvatarFromFile(e.target.files && e.target.files[0]);
+    e.target.value = "";          // so picking the same file twice still fires
+  });
+
+  document.querySelectorAll("[data-settings-tab]").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      settingsTab = btn.getAttribute("data-settings-tab");
+      renderSettings();
+    });
+  });
 
   /* ----------------------------- calendar ----------------------------- */
 
@@ -820,7 +1203,7 @@ import { loadState, saveState } from "./store.js";
     document.getElementById("cal-grid").innerHTML = html;
 
     document.getElementById("cal-hint").textContent = isMe
-      ? "Tap a day to edit that session, or an empty day to log one on that date."
+      ? "Tap a day to see that session, or an empty day to log one on that date."
       : "";
 
     // Don't browse past the current month -- there's nothing to see there.
@@ -837,7 +1220,7 @@ import { loadState, saveState } from "./store.js";
   function onCalendarDayTap(key, byDay) {
     var dayWorkouts = byDay[key] || [];
     if (dayWorkouts.length === 1) {
-      openEditWorkout(dayWorkouts[0].id);
+      openWorkoutDetail(dayWorkouts[0].id);
       return;
     }
     if (dayWorkouts.length > 1) {
@@ -847,7 +1230,7 @@ import { loadState, saveState } from "./store.js";
           '<span class="day-time">' + esc(formatTime(wk.performedAt)) + '</span>' +
           '<span class="person-body"><span class="person-name">' + esc(wk.title || "Workout") + '</span>' +
           '<span class="person-sub">' +
-            [gymObj ? esc(gymObj.name) : null].concat(sessionFacts(wk).map(esc))
+            [gymObj ? esc(gymLabel(gymObj)) : null].concat(sessionFacts(wk).map(esc))
               .filter(Boolean).join(' &middot; ') + '</span></span>' +
           '<span class="chevron">&rsaquo;</span></button>';
       }).join("");
@@ -856,7 +1239,7 @@ import { loadState, saveState } from "./store.js";
       el.querySelectorAll("[data-day-workout]").forEach(function (row) {
         row.addEventListener("click", function () {
           closeListSheet();
-          openEditWorkout(row.getAttribute("data-day-workout"));
+          openWorkoutDetail(row.getAttribute("data-day-workout"));
         });
       });
       return;
@@ -877,6 +1260,38 @@ import { loadState, saveState } from "./store.js";
   document.getElementById("cal-next").addEventListener("click", function () {
     calendarMonth = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + 1, 1);
     renderHome();
+  });
+
+  /* ----------------------------- are you sure ----------------------------- */
+
+  /* One dialog for anything destructive. It replaces both the tap-again
+     buttons, which were easy to miss, and the browser's own confirm(), which
+     freezes the page and looks nothing like the app. */
+  var confirmAction = null;
+
+  function openConfirm(opts) {
+    document.getElementById("confirm-title").textContent = opts.title;
+    document.getElementById("confirm-body").textContent = opts.body || "";
+    var yes = document.getElementById("confirm-yes");
+    yes.textContent = opts.confirmLabel || "Remove";
+    yes.classList.toggle("is-danger", opts.danger !== false);
+    confirmAction = opts.onConfirm;
+    document.getElementById("confirm-overlay").classList.add("open");
+  }
+
+  function closeConfirm() {
+    document.getElementById("confirm-overlay").classList.remove("open");
+    confirmAction = null;
+  }
+
+  document.getElementById("confirm-no").addEventListener("click", closeConfirm);
+  document.getElementById("confirm-yes").addEventListener("click", function () {
+    var go = confirmAction;
+    closeConfirm();
+    if (go) go();
+  });
+  document.getElementById("confirm-overlay").addEventListener("click", function (e) {
+    if (e.target.id === "confirm-overlay") closeConfirm();
   });
 
   /* ----------------------------- reusable list sheet ----------------------------- */
@@ -916,6 +1331,8 @@ import { loadState, saveState } from "./store.js";
         '<div class="summary-title">' + esc(workout.title || "Session logged") + '</div>' +
         '<div class="summary-meta">' + (gymObj ? esc(gymObj.name) + ' &middot; ' : '') +
           calendarDate(workout.performedAt) + ' &middot; ' + esc(formatTime(workout.performedAt)) + '</div>' +
+        (gymObj && gymAddress(gymObj)
+          ? '<div class="summary-place">' + esc(gymAddress(gymObj)) + '</div>' : '') +
       '</div>';
 
     if (prs.length) {
@@ -1005,22 +1422,331 @@ import { loadState, saveState } from "./store.js";
   }
 
 
-  /* ----------------------------- settings sheet ----------------------------- */
+  /* ----------------------------- friends ----------------------------- */
 
-  function openSettings() {
-    renderSettings();
-    document.getElementById("settings-modal-overlay").classList.add("open");
+  /* A page of its own: everyone you follow, newest first, grouped by day so
+     a busy week still reads as a list rather than a wall. */
+  /* Which day the Friends page is showing. One day at a time keeps the page
+     the same size however many people you follow; the arrows move it. */
+  var friendsDay = new Date();
+
+  function dayLabelFor(d) {
+    var key = localDayKey(d.toISOString());
+    var today = new Date();
+    var yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    if (key === localDayKey(today.toISOString())) return "Today";
+    if (key === localDayKey(yesterday.toISOString())) return "Yesterday";
+    return calendarDate(d.toISOString());
   }
 
-  function closeSettings() {
-    document.getElementById("settings-modal-overlay").classList.remove("open");
+  function renderFriends() {
+    var friends = friendsOf(state.me.id);
+    var subEl = document.getElementById("friends-sub");
+    var el = document.getElementById("friends-feed");
+    var nav = document.querySelector(".day-nav");
+
+    subEl.textContent = friends.length
+      ? friends.length + (friends.length === 1 ? " friend" : " friends") + " you follow"
+      : "";
+
+    if (!friends.length) {
+      nav.hidden = true;
+      el.innerHTML = '<div class="empty-state">No friends yet. Once accounts are in, ' +
+        'the people you follow show up here.</div>';
+      return;
+    }
+    nav.hidden = false;
+
+    var dayKeyWanted = localDayKey(friendsDay.toISOString());
+    var todayKey = localDayKey(new Date().toISOString());
+    document.getElementById("friends-day").textContent = dayLabelFor(friendsDay);
+    // there is nothing to see in the future
+    document.getElementById("friends-next").disabled = dayKeyWanted === todayKey;
+
+    var rows = [];
+    friends.forEach(function (u) {
+      workoutsOf(u.id).forEach(function (wk) {
+        if (localDayKey(wk.performedAt) === dayKeyWanted) rows.push({ user: u, wk: wk });
+      });
+    });
+    rows.sort(function (a, b) {
+      return new Date(b.wk.performedAt) - new Date(a.wk.performedAt);
+    });
+
+    /* Everyone you follow, in one line: who trained on this day and who did
+       not. It answers the question the page is really for without making you
+       scroll, and it stays one line as the list grows. */
+    // rows are newest first, so the first one per person is their latest
+    var trained = {};
+    rows.forEach(function (r) {
+      (trained[r.user.id] = trained[r.user.id] || []).push(r.wk.id);
+    });
+    var nTrained = Object.keys(trained).length;
+
+    var strip = '<div class="friend-strip">' +
+      friends.map(function (u) {
+        var theirs = trained[u.id] || [];
+        return '<button class="friend-dot' + (theirs.length ? " is-on" : "") + '"' +
+          (theirs.length ? ' data-friend-wk="' + theirs[0] + '"' : " disabled") +
+          ' title="' + esc(u.name) +
+            (theirs.length > 1 ? " -- " + theirs.length + " sessions" : "") + '">' +
+          '<span class="friend-dot-av">' + avatarHtml(u) +
+            (theirs.length > 1
+              ? '<span class="friend-dot-count">' + theirs.length + '</span>' : '') +
+          '</span>' +
+          '<span class="friend-dot-name">' + esc(u.name.split(" ")[0]) + '</span>' +
+        '</button>';
+      }).join("") +
+      '</div>' +
+      '<p class="friend-tally">' +
+        (nTrained
+          ? '<strong>' + nTrained + '</strong> of ' + friends.length + ' trained' +
+            (dayKeyWanted === todayKey ? " today" : " that day")
+          : (dayKeyWanted === todayKey ? "Nobody has logged yet today" : "Nobody logged that day")) +
+      '</p>';
+
+    if (!rows.length) {
+      el.innerHTML = strip;
+      el.querySelectorAll("[data-friend-wk]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          openWorkoutDetail(btn.getAttribute("data-friend-wk"));
+        });
+      });
+      return;
+    }
+
+    var html = strip;
+    rows.forEach(function (row) {
+      var gymObj = row.wk.gymId ? findGym(row.wk.gymId) : null;
+      var exCount = row.wk.exercises.length;
+      var theirs = trained[row.user.id] || [];
+      // their sessions are newest first, so count back from the end
+      var nth = theirs.length > 1
+        ? (theirs.length - theirs.indexOf(row.wk.id)) : 0;
+      html += '<div class="friend-card">' +
+        '<button class="friend-open" data-friend-wk="' + row.wk.id + '">' +
+          avatarHtml(row.user) +
+          '<span class="person-body">' +
+            '<span class="person-name">' + esc(row.user.name) +
+              (nth ? '<span class="nth-tag">#' + nth + ' today</span>' : '') + '</span>' +
+            '<span class="friend-what">' + esc(row.wk.title || "Workout") + '</span>' +
+            '<span class="person-sub">' +
+              [esc(formatTime(row.wk.performedAt)),
+               exCount + (exCount === 1 ? " exercise" : " exercises")]
+                .concat(sessionFacts(row.wk).map(esc))
+                .concat(gymObj ? [esc(gymLabel(gymObj))] : [])
+                .join(' &middot; ') +
+            '</span>' +
+          '</span>' +
+          '<span class="chevron">&rsaquo;</span>' +
+        '</button>' +
+        reactionBarHtml(row.wk) +
+      '</div>';
+    });
+    el.innerHTML = html;
+
+    el.querySelectorAll("[data-friend-wk]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        openWorkoutDetail(btn.getAttribute("data-friend-wk"));
+      });
+    });
+    wireReactions(el, renderFriends);
+  }
+
+  /* Managing who you follow belongs with the feed they appear in, not
+     buried in Settings. Removing someone takes their sessions with them --
+     locally there is no server for their log to stay on. */
+  function openFriendsManage() {
+    var friends = friendsOf(state.me.id);
+    var body =
+      '<div class="equip-add" style="margin-bottom:6px;">' +
+        '<input type="text" id="friend-new" placeholder="Name" autocomplete="off">' +
+        '<button class="btn btn-ghost" id="friend-add">Add</button>' +
+      '</div>' +
+      '<p class="setting-help" style="margin-top:6px;">Until accounts are in, this adds a ' +
+        'local friend with no sessions -- enough to see how the feed behaves.</p>' +
+      (friends.length
+        ? friends.map(function (u) {
+            var n = workoutsOf(u.id).length;
+            return '<div class="manage-row">' +
+              avatarHtml(u) +
+              '<span class="person-body">' +
+                '<span class="person-name">' + esc(u.name) + '</span>' +
+                '<span class="person-sub">' + n + (n === 1 ? " session" : " sessions") + '</span>' +
+              '</span>' +
+              '<button class="btn-danger-text manage-drop" data-drop-friend="' + esc(u.id) + '">Remove</button>' +
+            '</div>';
+          }).join("")
+        : '<div class="empty-state">Nobody yet.</div>');
+
+    var el = openListSheet("Your friends", body);
+
+    var input = el.querySelector("#friend-new");
+    el.querySelector("#friend-add").addEventListener("click", function () {
+      var name = titleCase(input.value);
+      if (!name) { showToast("Give them a name."); return; }
+      var taken = friendsOf(state.me.id).some(function (u) {
+        return u.name.toLowerCase() === name.toLowerCase();
+      });
+      if (taken) { showToast("You already follow " + name + "."); return; }
+      var u = { id: uid("usr"), name: name, handle: name.toLowerCase().replace(/\s+/g, ""), isPrivate: false };
+      state.users.push(u);
+      state.follows.push([state.me.id, u.id]);
+      persist();
+      closeListSheet();
+      renderFriends();
+      openFriendsManage();
+      showToast("Following " + name + ".");
+    });
+
+    el.querySelectorAll("[data-drop-friend]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var id = btn.getAttribute("data-drop-friend");
+        var u = findUser(id);
+        if (!u) return;
+        var n = workoutsOf(id).length;
+        openConfirm({
+          title: "Remove " + u.name + "?",
+          body: n
+            ? "They come off your feed and " + n + (n === 1 ? " session goes" : " sessions go") + " with them."
+            : "They come off your feed.",
+          confirmLabel: "Remove",
+          onConfirm: function () {
+            state.follows = state.follows.filter(function (f) { return f[1] !== id; });
+            state.users = state.users.filter(function (x) { return x.id !== id; });
+            state.workouts = state.workouts.filter(function (w) { return w.userId !== id; });
+            persist();
+            closeListSheet();
+            renderFriends();
+            renderHome();
+            openFriendsManage();
+            showToast("Removed " + u.name + ".");
+          }
+        });
+      });
+    });
+  }
+
+  document.getElementById("friends-manage").addEventListener("click", openFriendsManage);
+
+  function shiftFriendsDay(delta) {
+    var d = new Date(friendsDay);
+    d.setDate(d.getDate() + delta);
+    if (d > new Date()) return;
+    friendsDay = d;
+    renderFriends();
+  }
+
+  document.getElementById("friends-prev").addEventListener("click", function () { shiftFriendsDay(-1); });
+  document.getElementById("friends-next").addEventListener("click", function () { shiftFriendsDay(1); });
+
+  /* ----------------------------- a logged session ----------------------------- */
+
+  /* What you get when you tap a session: the whole thing laid out to be read,
+     or handed to someone. Editing is a button, not what tapping does. */
+  function openWorkoutDetail(workoutId) {
+    var wk = state.workouts.filter(function (w) { return w.id === workoutId; })[0];
+    if (!wk) return;
+    var mine = wk.userId === state.me.id;
+    var gymObj = wk.gymId ? findGym(wk.gymId) : null;
+    var vol = sessionVolume(wk.exercises);
+    var sets = repSetCount(wk.exercises);
+    var mins = durationOf(wk);
+    var setTime = loggedSetTime(wk.exercises);
+    var dist = sessionDistance(wk.exercises);
+
+    var tiles = [{ value: wk.exercises.length,
+                   label: wk.exercises.length === 1 ? "Exercise" : "Exercises" }];
+    if (sets) tiles.push({ value: sets, label: sets === 1 ? "Set" : "Sets" });
+    if (mins) tiles.push({ value: formatDurationLong(mins), label: "Duration" });
+    else if (setTime) tiles.push({ value: formatDuration(setTime), label: "Time" });
+    if (dist.mi) tiles.push({ value: Math.round(dist.mi * 100) / 100, label: "Miles" });
+    else if (dist.km) tiles.push({ value: Math.round(dist.km * 100) / 100, label: "Km" });
+    else if (vol.lb) tiles.push({ value: Math.round(vol.lb).toLocaleString(), label: "Volume lb" });
+    else if (vol.kg) tiles.push({ value: Math.round(vol.kg).toLocaleString(), label: "Volume kg" });
+    if (wk.calories != null) tiles.push({ value: wk.calories, label: "Calories" });
+    tiles = tiles.slice(0, 4);
+
+    var ssLabels = supersetLabels(wk.exercises);
+
+    var who = mine ? null : findUser(wk.userId);
+    var html =
+      '<div class="detail-head">' +
+        (who
+          ? '<div class="detail-who">' + avatarHtml(who) +
+            '<span>' + esc(who.name) + '</span></div>'
+          : '') +
+        '<div class="detail-title">' + esc(wk.title || "Workout") + '</div>' +
+        '<div class="detail-when">' + calendarDate(wk.performedAt) + ' &middot; ' +
+          esc(formatTime(wk.performedAt)) +
+          (wk.endedAt ? ' &ndash; ' + esc(formatTime(wk.endedAt)) : '') + '</div>' +
+        (gymObj
+          ? '<div class="detail-gym"><span class="detail-gym-name">' + esc(gymLabel(gymObj)) + '</span>' +
+            (gymAddress(gymObj) ? '<span class="detail-gym-addr">' + esc(gymAddress(gymObj)) + '</span>' : '') +
+            '</div>'
+          : '') +
+      '</div>';
+
+    html += '<div class="stat-grid" style="margin:16px 0 20px;' +
+      (tiles.length === 4 ? "grid-template-columns:repeat(2,1fr);" : "") + '">' +
+      tiles.map(function (t) {
+        return '<div class="stat-tile"><span class="num">' + esc(String(t.value)) +
+          '</span><span class="label">' + esc(t.label) + '</span></div>';
+      }).join("") + '</div>';
+
+    html += wk.exercises.map(function (blk, i) {
+      var exObj = findExercise(blk.exerciseId);
+      var prev = wk.exercises[i - 1];
+      var linked = blk.superset && prev && prev.superset === blk.superset;
+      return '<div class="detail-ex' + (linked ? " is-linked" : "") + '">' +
+        '<div class="detail-ex-head">' +
+          '<span class="detail-ex-name">' +
+            (ssLabels[i] ? '<span class="detail-ss">' + ssLabels[i] + '</span>' : '') +
+            esc(exObj ? exObj.name : "Exercise") + '</span>' +
+          (blk.equipment ? '<span class="detail-ex-eq">' + esc(blk.equipment) + '</span>' : '') +
+        '</div>' +
+        '<div class="detail-ex-sets num">' + esc(summarizeSets(blk.sets, metricOf(blk))) + '</div>' +
+        (blk.note ? '<div class="detail-ex-note">' + esc(blk.note) + '</div>' : '') +
+      '</div>';
+    }).join("");
+
+    if (mine) {
+      html += '<button class="btn btn-ghost btn-block" id="detail-edit" style="margin-top:18px;">Edit workout</button>';
+    } else {
+      html += '<div class="detail-react">' + reactionBarHtml(wk) + '</div>';
+    }
+
+    var el = openListSheet("Workout", html);
+    if (mine) {
+      el.querySelector("#detail-edit").addEventListener("click", function () {
+        closeListSheet();
+        openEditWorkout(workoutId);
+      });
+    } else {
+      wireReactions(el, function () {
+        openWorkoutDetail(workoutId);   // redraw the sheet with the new count
+        renderFriends();
+      });
+    }
+  }
+
+  /* ----------------------------- settings sheet ----------------------------- */
+
+  /* The menu button is a toggle: it opens Settings, and pressing it again
+     puts you back on whatever screen you came from rather than on Home. */
+  var settingsReturnTo = "home";
+
+  function openSettings() {
+    if (currentTab === "settings") {
+      activateTab(settingsReturnTo || "home");
+      return;
+    }
+    settingsReturnTo = currentTab;
+    activateTab("settings");
   }
 
   document.getElementById("open-settings").addEventListener("click", openSettings);
-  document.getElementById("settings-modal-close").addEventListener("click", closeSettings);
-  document.getElementById("settings-modal-overlay").addEventListener("click", function (e) {
-    if (e.target.id === "settings-modal-overlay") closeSettings();
-  });
 
   /* ----------------------------- backup ----------------------------- */
 
@@ -1068,16 +1794,24 @@ import { loadState, saveState } from "./store.js";
         note.textContent = "That JSON doesn't look like a GymSocial backup.";
         return;
       }
-      if (!confirm("Replace everything in this browser with the backup (" + parsed.workouts.length + " workouts)?")) return;
-      state = migrate(parsed);
-      selectedExerciseId = null;
-      calendarMonth = null;
-      resetDraft();
-      persist();
-      closeListSheet();
-      closeSettings();
-      activateTab("home");
-      showToast("Restored " + state.workouts.length + " workouts.");
+      openConfirm({
+        title: "Replace everything?",
+        body: "The backup has " + parsed.workouts.length +
+          (parsed.workouts.length === 1 ? " workout" : " workouts") +
+          ". Whatever is in this browser now is overwritten.",
+        confirmLabel: "Restore",
+        onConfirm: function () {
+          state = migrate(parsed);
+          selectedExerciseId = null;
+          calendarMonth = null;
+          resetDraft();
+          persist();
+          applyTheme();
+          closeListSheet();
+          activateTab("home");
+          showToast("Restored " + state.workouts.length + " workouts.");
+        }
+      });
     });
   }
 
@@ -1201,7 +1935,7 @@ import { loadState, saveState } from "./store.js";
     if (!query) return true;
     var hay = [wk.userName, wk.title || ""];
     var g = wk.gymId ? findGym(wk.gymId) : null;
-    if (g) { hay.push(g.name); hay.push(g.city || ""); }
+    if (g) { hay.push(g.name); hay.push(gymAddress(g)); }
     wk.exercises.forEach(function (we) {
       var exObj = findExercise(we.exerciseId);
       if (exObj) hay.push(exObj.name);
@@ -1262,22 +1996,39 @@ import { loadState, saveState } from "./store.js";
 
   /* ----------------------------- tabs ----------------------------- */
 
-  var screens = ["home", "log", "progress", "gyms"];
+  var screens = ["home", "log", "friends", "progress", "gyms", "settings"];
+  var currentTab = "home";
+
+  var MENU_SVG = '<svg viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round">' +
+    '<path d="M4 7h16M4 12h16M4 17h16"/></svg>';
+  var CLOSE_SVG = '<svg viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round">' +
+    '<path d="M6 6l12 12M18 6L6 18"/></svg>';
 
   function activateTab(name) {
+    currentTab = name;
+
+    // the button shows what pressing it will do next
+    var menu = document.getElementById("open-settings");
+    var inSettings = name === "settings";
+    menu.classList.toggle("is-open", inSettings);
+    menu.innerHTML = inSettings ? CLOSE_SVG : MENU_SVG;
+    menu.setAttribute("aria-label", inSettings ? "Close settings" : "Menu");
+
     screens.forEach(function (s) {
       document.getElementById("screen-" + s).classList.toggle("active", s === name);
     });
-    document.querySelectorAll(".tab-btn").forEach(function (btn) {
+    document.querySelectorAll("[data-tab]").forEach(function (btn) {
       btn.classList.toggle("active", btn.getAttribute("data-tab") === name);
     });
     if (name === "home") renderHome();
     if (name === "log") renderLog();
+    if (name === "friends") renderFriends();
+    if (name === "settings") renderSettings();
     if (name === "progress") renderProgress();
     if (name === "gyms") renderGyms();
   }
 
-  document.querySelectorAll(".tab-btn").forEach(function (btn) {
+  document.querySelectorAll("[data-tab]").forEach(function (btn) {
     btn.addEventListener("click", function () {
       activateTab(btn.getAttribute("data-tab"));
     });
@@ -1376,13 +2127,21 @@ import { loadState, saveState } from "./store.js";
   });
 
   document.getElementById("edit-delete-btn").addEventListener("click", function () {
-    if (!confirm("Delete this workout? This can't be undone.")) return;
-    state.workouts = state.workouts.filter(function (w) { return w.id !== editingId; });
-    selectedExerciseId = null;
-    persist();
-    closeEditWorkout();
-    renderHome();
-    showToast("Workout deleted.");
+    var wk = state.workouts.filter(function (w) { return w.id === editingId; })[0];
+    var id = editingId;
+    openConfirm({
+      title: "Delete " + ((wk && wk.title) || "this workout") + "?",
+      body: "The sets, notes and check-in go with it. This cannot be undone.",
+      confirmLabel: "Delete",
+      onConfirm: function () {
+        state.workouts = state.workouts.filter(function (w) { return w.id !== id; });
+        selectedExerciseId = null;
+        persist();
+        closeEditWorkout();
+        renderHome();
+        showToast("Workout deleted.");
+      }
+    });
   });
 
   /* ----------------------------- log ----------------------------- */
@@ -1470,12 +2229,11 @@ import { loadState, saveState } from "./store.js";
               '<input type="number" inputmode="numeric" class="dur-s" placeholder="s" value="' + esc(p.s) + '">' +
             '</span>';
         } else {
-          firstCell = '<input type="number" inputmode="numeric" placeholder="Reps" class="set-v1"' +
-            wheelAttrs("reps") + ' value="' + esc(s.reps == null ? "" : s.reps) + '">';
+          firstCell = '<input type="number" inputmode="numeric" placeholder="Reps" class="set-v1" value="' +
+            esc(s.reps == null ? "" : s.reps) + '">';
         }
         var weightCells = noWt ? "" :
-          '<input type="number" inputmode="decimal" placeholder="' + cfg.col2 + '" class="set-v2"' +
-            (metric === "distance" ? "" : wheelAttrs("weight")) + ' value="' + esc(v2) + '">' +
+          '<input type="number" inputmode="decimal" placeholder="' + cfg.col2 + '" class="set-v2" value="' + esc(v2) + '">' +
           '<button class="unit-toggle" data-unit-toggle>' + (s[unitKey] || cfg.units[0]) + '</button>';
         return '' +
           '<div class="set-row' + (dur ? " has-duration" : "") + (noWt ? " no-weight" : "") +
@@ -1743,11 +2501,7 @@ import { loadState, saveState } from "./store.js";
           setObj.reps = raw === "" ? null : Number(raw);
         });
       }
-      var v1El = row.querySelector(".set-v1");
-      if (v1El) wireWheel(v1El, setObj, "reps", cfg, metric);
-
       var v2El = row.querySelector(".set-v2");          // absent on bodyweight
-      if (v2El) wireWheel(v2El, setObj, "weight", cfg, metric);
       if (v2El) {
         v2El.addEventListener("input", function (e) {
           var raw = e.target.value;
@@ -1782,7 +2536,7 @@ import { loadState, saveState } from "./store.js";
 
   function gymOptionsHtml(selectedId) {
     return '<option value="">No check-in</option>' + state.gyms.map(function (g) {
-      return '<option value="' + g.id + '"' + (g.id === selectedId ? " selected" : "") + '>' + esc(g.name) + '</option>';
+      return '<option value="' + g.id + '"' + (g.id === selectedId ? " selected" : "") + '>' + esc(gymLabel(g)) + '</option>';
     }).join("");
   }
 
@@ -1800,9 +2554,12 @@ import { loadState, saveState } from "./store.js";
       exerciseId: exObj.id,
       metric: metric,
       equipment: equip,
+      // Same shape as last time -- as many sets, same units -- but the boxes
+      // start empty. The "Last time" line above is the reference; nothing
+      // gets logged just because you tapped Save.
       sets: last.block.sets.map(function (s) {
         return {
-          reps: s.reps, seconds: s.seconds, weight: s.weight, distance: s.distance,
+          reps: null, seconds: null, weight: null, distance: null,
           unit: s.unit || "lb", distUnit: s.distUnit || "mi"
         };
       })
@@ -1856,16 +2613,11 @@ import { loadState, saveState } from "./store.js";
     };
 
     document.getElementById("add-gym-btn").onclick = function () {
-      var input = document.getElementById("new-gym-name");
-      var name = input.value.trim();
-      if (!name) return;
-      var g = { id: uid("gym"), name: name, city: "", offerings: [] };
-      state.gyms.push(g);
-      draft.gymId = g.id;
-      input.value = "";
-      persist();
-      renderLog();
-      showToast('Added "' + name + '" -- checked in.');
+      openGymAdd(function (g) {
+        draft.gymId = g.id;              // adding one from here checks you in
+        renderLog();
+        showToast('Added ' + gymLabel(g) + ' -- checked in.');
+      });
     };
 
     document.getElementById("add-exercise-btn").onclick = function () {
@@ -2049,25 +2801,51 @@ import { loadState, saveState } from "./store.js";
     return byExercise;
   }
 
+  var progressQuery = "";
+
   function renderProgress() {
     var series = buildProgressSeries();
     var ids = Object.keys(series).sort(function (a, b) { return series[b].points.length - series[a].points.length; });
-    var chipsEl = document.getElementById("progress-chips");
+    var resultsEl = document.getElementById("progress-results");
     var bodyEl = document.getElementById("progress-body");
 
     if (!ids.length) {
-      chipsEl.innerHTML = "";
+      resultsEl.innerHTML = "";
       bodyEl.innerHTML = '<div class="empty-state">Log a workout with weights to start seeing progress here.</div>';
       return;
     }
     if (!selectedExerciseId || !series[selectedExerciseId]) selectedExerciseId = ids[0];
 
-    chipsEl.innerHTML = ids.map(function (id) {
-      return '<button class="chip' + (id === selectedExerciseId ? " active" : "") + '" data-ex-chip="' + id + '">' + esc(series[id].name) + '</button>';
-    }).join("");
-    chipsEl.querySelectorAll("[data-ex-chip]").forEach(function (btn) {
-      btn.addEventListener("click", function () { selectedExerciseId = btn.getAttribute("data-ex-chip"); renderProgress(); });
-    });
+    /* Nothing typed shows the exercise you train most, not a wall of chips.
+       The box is for getting to any of the others. */
+    var q = progressQuery.trim().toLowerCase();
+    if (!q) {
+      resultsEl.innerHTML = "";
+    } else {
+      var hits = ids.filter(function (id) {
+        return series[id].name.toLowerCase().indexOf(q) !== -1;
+      });
+      resultsEl.innerHTML = hits.length
+        ? hits.map(function (id) {
+            var n = series[id].points.length;
+            return '<button class="picker-row' + (id === selectedExerciseId ? " is-current" : "") +
+              '" data-ex-pick="' + id + '">' + esc(series[id].name) +
+              '<span class="picker-sub">' + n + (n === 1 ? " session" : " sessions") +
+              ' &middot; best ' + esc(formatValue(
+                Math.max.apply(null, series[id].points.map(function (p) { return p.weight; })),
+                series[id].metric, series[id].unit)) + '</span></button>';
+          }).join("")
+        : '<div class="empty-state" style="padding:14px 2px;">Nothing logged matches &ldquo;' +
+            esc(progressQuery.trim()) + '&rdquo;.</div>';
+      resultsEl.querySelectorAll("[data-ex-pick]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          selectedExerciseId = btn.getAttribute("data-ex-pick");
+          progressQuery = "";
+          document.getElementById("progress-search").value = "";
+          renderProgress();
+        });
+      });
+    }
 
     var s = series[selectedExerciseId];
     var best = Math.max.apply(null, s.points.map(function (p) { return p.weight; }));
@@ -2138,14 +2916,14 @@ import { loadState, saveState } from "./store.js";
       var isLast = i === points.length - 1;
       svg.appendChild(el("circle", { cx: x(i), cy: y(p.weight), r: isLast ? 5 : 3.5, fill: isLast ? "var(--accent)" : "var(--bg)", stroke: "var(--accent)", "stroke-width": 2 }));
       if (i === 0 || isLast) {
-        var t = el("text", { x: x(i), y: H - 6, "text-anchor": i === 0 ? "start" : "end", fill: "var(--text-faint)", "font-size": "9", "font-family": "IBM Plex Mono, monospace" });
+        var t = el("text", { x: x(i), y: H - 6, "text-anchor": i === 0 ? "start" : "end", fill: "var(--text-faint)", "font-size": "9", "font-family": "Roboto Mono, monospace" });
         t.textContent = shortDate(p.date);
         svg.appendChild(t);
       }
     });
 
     // direct label on the last point
-    var lastLabel = el("text", { x: x(points.length - 1), y: y(points[points.length - 1].weight) - 11, "text-anchor": "end", fill: "var(--text)", "font-size": "11", "font-weight": "600", "font-family": "IBM Plex Mono, monospace" });
+    var lastLabel = el("text", { x: x(points.length - 1), y: y(points[points.length - 1].weight) - 11, "text-anchor": "end", fill: "var(--text)", "font-size": "11", "font-weight": "600", "font-family": "Roboto Mono, monospace" });
     lastLabel.textContent = formatValue(points[points.length - 1].weight, metric, unit);
     svg.appendChild(lastLabel);
 
@@ -2191,12 +2969,14 @@ import { loadState, saveState } from "./store.js";
 
   function renderGyms() {
     var q = (document.getElementById("gym-search").value || "").toLowerCase();
-    var list = state.gyms.filter(function (g) { return g.name.toLowerCase().indexOf(q) !== -1; });
+    var list = state.gyms.filter(function (g) {
+      return (g.name + " " + gymAddress(g)).toLowerCase().indexOf(q) !== -1;
+    });
     var el = document.getElementById("gym-list");
     if (!list.length) { el.innerHTML = '<div class="empty-state">No gyms match "' + esc(q) + '".</div>'; return; }
     el.innerHTML = list.map(function (g) {
       var n = myWorkouts().filter(function (w) { return w.gymId === g.id; }).length;
-      var sub = [g.city, n + (n === 1 ? " session" : " sessions")].filter(Boolean).join(" \u00b7 ");
+      var sub = [gymAddress(g), n + (n === 1 ? " session" : " sessions")].filter(Boolean).join(" \u00b7 ");
       return '<div class="gym-row" data-gym="' + g.id + '">' +
         '<div><div class="gym-row-name">' + esc(g.name) + '</div>' +
         '<div class="gym-row-city">' + esc(sub) + '</div></div>' +
@@ -2209,28 +2989,171 @@ import { loadState, saveState } from "./store.js";
   document.getElementById("gym-search").addEventListener("input", renderGyms);
 
   document.getElementById("gyms-add-btn").addEventListener("click", function () {
-    var input = document.getElementById("gyms-new-name");
-    var name = input.value.trim();
-    if (!name) return;
-    if (state.gyms.some(function (g) { return g.name.toLowerCase() === name.toLowerCase(); })) {
-      showToast("You already have that gym.");
-      return;
-    }
-    state.gyms.push({ id: uid("gym"), name: name, city: "", offerings: [] });
-    input.value = "";
-    persist();
-    renderGyms();
-    showToast('Added "' + name + '".');
+    openGymAdd(function (g) {
+      renderGyms();
+      showToast("Added " + gymLabel(g) + ".");
+    });
   });
 
+  /* ----------------------------- add a gym ----------------------------- */
+
+  var gymAddDone = null;
+  var gymEditing = null;      // the gym being changed, or null when adding
+
+  function gymAddFields() {
+    return {
+      name: document.getElementById("gym-add-name"),
+      street: document.getElementById("gym-add-street"),
+      city: document.getElementById("gym-add-city"),
+      state: document.getElementById("gym-add-state")
+    };
+  }
+
+  /* Shows what the gym will be called before you commit to it, so the
+     "Name - City, ST" shape is never a surprise. */
+  function updateGymAddPreview() {
+    var f = gymAddFields();
+    var draftGym = {
+      id: gymEditing ? gymEditing.id : null,
+      name: titleCase(f.name.value) || "Name",
+      street: titleCase(f.street.value),
+      city: titleCase(f.city.value),
+      state: f.state.value.trim().toUpperCase()
+    };
+    document.getElementById("gym-add-preview").innerHTML =
+      "Saves as <strong>" + esc(gymLabel(draftGym)) + "</strong>";
+  }
+
+  /* One sheet for both jobs: with a gym it edits that one, without it adds
+     a new one. Same fields, same preview, same validation. */
+  function openGymAdd(onSaved, gym) {
+    gymAddDone = onSaved;
+    gymEditing = gym || null;
+    var f = gymAddFields();
+    f.name.value = gym ? gym.name : "";
+    f.street.value = gym ? (gym.street || "") : "";
+    f.city.value = gym ? (gym.city || "") : "";
+    f.state.value = gym ? (gym.state || "") : "";
+
+    document.getElementById("gym-add-title").textContent = gym ? "Edit gym" : "Add gym";
+    document.getElementById("gym-add-save").textContent = gym ? "Save changes" : "Save gym";
+    var remove = document.getElementById("gym-add-remove");
+    remove.hidden = !gym;
+    remove.textContent = "Remove gym";
+    remove.classList.remove("is-armed");
+
+    updateGymAddPreview();
+    document.getElementById("gym-add-overlay").classList.add("open");
+    if (!gym) f.name.focus();
+  }
+
+  function closeGymAdd() {
+    document.getElementById("gym-add-overlay").classList.remove("open");
+    gymAddDone = null;
+    gymEditing = null;
+  }
+
+  (function wireGymAdd() {
+    var f = gymAddFields();
+    [f.name, f.street, f.city, f.state].forEach(function (input) {
+      input.addEventListener("input", updateGymAddPreview);
+    });
+    // Letters only, two of them. maxlength would let a stray digit eat a
+    // slot, so the trimming happens after the junk is thrown away.
+    f.state.addEventListener("input", function (e) {
+      e.target.value = e.target.value.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 2);
+    });
+
+    document.getElementById("gym-add-close").addEventListener("click", closeGymAdd);
+    document.getElementById("gym-add-overlay").addEventListener("click", function (e) {
+      if (e.target.id === "gym-add-overlay") closeGymAdd();
+    });
+
+    document.getElementById("gym-add-save").addEventListener("click", function () {
+      var fields = {
+        name: titleCase(f.name.value),
+        street: titleCase(f.street.value),
+        city: titleCase(f.city.value),
+        state: f.state.value.trim().toUpperCase()
+      };
+      if (!fields.name) { showToast("Give the gym a name."); f.name.focus(); return; }
+
+      var key = gymKey(fields);
+      var clash = state.gyms.some(function (x) {
+        return x !== gymEditing && gymKey(x) === key;
+      });
+      if (clash) { showToast("You already have that one."); return; }
+
+      var g = gymEditing;
+      if (g) {
+        // edited in place, so every workout already checked in here follows
+        g.name = fields.name;
+        g.street = fields.street;
+        g.city = fields.city;
+        g.state = fields.state;
+      } else {
+        g = { id: uid("gym"), name: fields.name, street: fields.street,
+              city: fields.city, state: fields.state, offerings: [] };
+        state.gyms.push(g);
+      }
+      var wasEdit = !!gymEditing;
+      persist();
+      var done = gymAddDone;
+      closeGymAdd();
+      if (done) done(g, wasEdit);
+    });
+
+    document.getElementById("gym-add-remove").addEventListener("click", function () {
+      var g = gymEditing;
+      if (!g) return;
+      var n = state.workouts.filter(function (w) { return w.gymId === g.id; }).length;
+      openConfirm({
+        title: "Remove " + g.name + "?",
+        body: n
+          ? n + (n === 1 ? " session loses its check-in" : " sessions lose their check-in") +
+            ". The sessions themselves are kept."
+          : "Nothing is checked in here yet.",
+        confirmLabel: "Remove gym",
+        onConfirm: function () {
+          state.workouts.forEach(function (w) { if (w.gymId === g.id) w.gymId = null; });
+          state.gyms = state.gyms.filter(function (x) { return x.id !== g.id; });
+          if (draft.gymId === g.id) draft.gymId = "";
+          if (editDraft && editDraft.gymId === g.id) editDraft.gymId = "";
+          persist();
+          closeGymAdd();
+          document.getElementById("gym-modal-overlay").classList.remove("open");
+          renderGyms();
+          renderLog();
+          renderHome();
+          showToast("Removed " + g.name + ".");
+        }
+      });
+    });
+  })();
+
+  document.getElementById("gym-modal-edit").addEventListener("click", function () {
+    var g = findGym(openGymId);
+    if (!g) return;
+    openGymAdd(function (saved) {
+      renderGyms();
+      renderLog();
+      renderHome();
+      openGymModal(saved.id);          // reopen with the new details
+      showToast("Updated " + gymLabel(saved) + ".");
+    }, g);
+  });
+
+  var openGymId = null;
+
   function openGymModal(gymId) {
+    openGymId = gymId;
     var g = findGym(gymId);
     var breakdown = gymExerciseBreakdown(gymId);
     var sessions = myWorkouts().filter(function (w) { return w.gymId === gymId; })
       .sort(function (a, b) { return new Date(b.performedAt) - new Date(a.performedAt); });
     var overlay = document.getElementById("gym-modal-overlay");
     overlay.querySelector("#gym-modal-name").textContent = g.name;
-    overlay.querySelector("#gym-modal-city").textContent = g.city || "";
+    overlay.querySelector("#gym-modal-city").textContent = gymAddress(g);
 
     overlay.querySelector("#gym-modal-summary").innerHTML = sessions.length
       ? '<div class="stat-grid two" style="margin:0 0 16px;">' +
@@ -2273,17 +3196,23 @@ import { loadState, saveState } from "./store.js";
     document.getElementById("home-greeting").textContent =
       me.name && me.name !== "You" ? first + "'s Training" : "Your Training";
 
-    renderStreak(me.id, true);
-
+    var streak = computeStreak(me.id);
     document.getElementById("profile-stats").innerHTML = [
       { label: "Workouts", value: mine.length },
       { label: "Gyms", value: gymsOf(me.id).length, action: "gyms" },
-      { label: "Exercises", value: exerciseCountOf(me.id) }
+      { label: streakUnit(streak.mode) + " streak", value: streak.current, flame: true }
     ].map(function (s) {
       var tag = s.action ? "button" : "div";
+      var num = s.flame
+        ? '<span class="num is-streak">' +
+            FLAME_SVG.replace("streak-flame", "streak-flame" + (s.value ? "" : " cold")) +
+            s.value + '</span>'
+        : '<span class="num">' + s.value + '</span>';
       return "<" + tag + ' class="stat-tile"' + (s.action ? ' data-stat="' + s.action + '"' : "") + '>' +
-        '<span class="num">' + s.value + '</span><span class="label">' + s.label + '</span></' + tag + '>';
+        num + '<span class="label">' + s.label + '</span></' + tag + '>';
     }).join("");
+
+    renderGoalBar(me.id);
 
     document.querySelectorAll("#profile-stats [data-stat]").forEach(function (tile) {
       tile.addEventListener("click", function () { openGymsSheet(me.id); });
@@ -2326,13 +3255,13 @@ import { loadState, saveState } from "./store.js";
       var exCount = wk.exercises.length;
       html += '' +
         // Only your own entries open the editor when tapped.
-        '<button class="log-row"' + (isMe ? ' data-edit-row="' + wk.id + '"' : ' style="cursor:default;"') + '>' +
+        '<button class="log-row" data-open-row="' + wk.id + '">' +
           '<span class="log-date"><span class="log-day">' + d.getDate() + '</span><span class="log-mon">' + MONTHS[d.getMonth()].toUpperCase() + '</span></span>' +
           '<span class="log-body">' +
             '<span class="log-title" style="display:block;">' + esc(wk.title || "Workout") + '</span>' +
             '<span class="log-meta" style="display:block;">' +
               [esc(formatTime(wk.performedAt))]
-                .concat(gymObj ? [esc(gymObj.name)] : [])
+                .concat(gymObj ? [esc(gymLabel(gymObj))] : [])
                 .concat(sessionFacts(wk).map(esc))
                 .concat([exCount + (exCount === 1 ? " exercise" : " exercises")])
                 .join(' &middot; ') +
@@ -2343,28 +3272,12 @@ import { loadState, saveState } from "./store.js";
     });
     el.innerHTML = html;
 
-    el.querySelectorAll("[data-edit-row]").forEach(function (row) {
-      row.addEventListener("click", function () { openEditWorkout(row.getAttribute("data-edit-row")); });
+    el.querySelectorAll("[data-open-row]").forEach(function (row) {
+      row.addEventListener("click", function () { openWorkoutDetail(row.getAttribute("data-open-row")); });
     });
   }
 
   document.getElementById("profile-search").addEventListener("input", renderHome);
-
-  document.getElementById("reset-demo-btn").addEventListener("click", function () {
-    // This deletes real training history now, so make it hard to do by accident.
-    var n = state.workouts.length;
-    if (!confirm("Erase everything? This deletes " + n + (n === 1 ? " workout" : " workouts") +
-      " and can't be undone. Export a backup first if you want to keep it.")) return;
-    if (n > 0 && !confirm("Really erase " + n + " logged " + (n === 1 ? "workout" : "workouts") + "?")) return;
-    state = seedState();
-    selectedExerciseId = null;
-    calendarMonth = null;
-    resetDraft();
-    persist();
-    closeSettings();
-    activateTab("home");
-    showToast("Everything erased.");
-  });
 
   /* The storage warning matters once; after that it's clutter. */
   (function storageNote() {
@@ -2379,127 +3292,23 @@ import { loadState, saveState } from "./store.js";
     });
   })();
 
-  /* ----------------------------- the wheel ----------------------------- */
+  document.getElementById("progress-search").addEventListener("input", function (e) {
+    progressQuery = e.target.value;
+    renderProgress();
+  });
 
-  /* A scrolling column instead of a keypad. The numbers you actually use are
-     a flick away, and nothing covers half the screen. 123 on the sheet hands
-     that one entry back to the keyboard. */
+  /* ----------------------------- theme ----------------------------- */
 
-  var WHEEL_ITEM = 40;   // must match .wheel-item in the stylesheet
+  /* Light is the default and matches MyFitnessPal. Dark is the same layout on
+     a dark surface -- one attribute on <html> swaps every colour, because the
+     stylesheet only ever names variables. */
+  var THEME_BAR = { light: "#f4f6f8", dark: "#12151a" };
 
-  function wheelMode() { return (state.settings.numberEntry || "wheel") === "wheel"; }
-
-  /* readonly is what stops iOS opening the keyboard on tap. */
-  function wheelAttrs(kind) { return wheelMode() ? ' readonly data-wheel="' + kind + '"' : ""; }
-
-  function wheelValues(kind, unit) {
-    var out = [], i;
-    if (kind === "reps") {
-      for (i = 1; i <= 60; i++) out.push(i);
-      return out;
-    }
-    var step = unit === "kg" ? 1.25 : 2.5;
-    var max = unit === "kg" ? 300 : 600;
-    for (i = 0; i * step <= max; i++) out.push(Math.round(i * step * 100) / 100);
-    return out;
-  }
-
-  function nearestIndex(vals, v) {
-    if (v == null || v === "") return kindDefaultIndex(vals);
-    var best = 0, diff = Infinity;
-    vals.forEach(function (x, i) {
-      var d = Math.abs(x - v);
-      if (d < diff) { diff = d; best = i; }
-    });
-    return best;
-  }
-
-  /* Opening on 1 or 0 means a long flick every time; start somewhere usable. */
-  function kindDefaultIndex(vals) {
-    return vals.length > 40 ? Math.min(vals.length - 1, 12) : Math.min(vals.length - 1, 7);
-  }
-
-  var wheel = { input: null, setObj: null, kind: null, vals: [], idx: 0 };
-
-  function openWheel(input, setObj, kind, cfg, metric) {
-    var unit = setObj[cfg.unitKey] || cfg.units[0];
-    var vals = wheelValues(kind, unit);
-    var cur = kind === "reps" ? setObj.reps : setObj.weight;
-    wheel = { input: input, setObj: setObj, kind: kind, vals: vals, idx: nearestIndex(vals, cur) };
-
-    document.getElementById("wheel-title").textContent =
-      kind === "reps" ? "Reps" : "Weight (" + unit + ")";
-
-    var col = document.getElementById("wheel-col");
-    col.innerHTML = vals.map(function (v) {
-      return '<div class="wheel-item">' + v + '</div>';
-    }).join("");
-    document.getElementById("wheel-modal-overlay").classList.add("open");
-    // after the sheet is on screen, or scrollTop lands on a hidden element
-    requestAnimationFrame(function () {
-      col.scrollTop = wheel.idx * WHEEL_ITEM;
-      markWheel();
-    });
-  }
-
-  function closeWheel() {
-    document.getElementById("wheel-modal-overlay").classList.remove("open");
-    wheel.input = null;
-  }
-
-  function markWheel() {
-    var col = document.getElementById("wheel-col");
-    var i = Math.max(0, Math.min(wheel.vals.length - 1, Math.round(col.scrollTop / WHEEL_ITEM)));
-    if (i === wheel.idx && col.querySelector(".wheel-item.on")) return;
-    var was = wheel.idx;
-    wheel.idx = i;
-    var items = col.children;
-    if (items[was]) items[was].classList.remove("on");
-    if (items[i]) items[i].classList.add("on");
-    if (was !== i) commitWheel();
-  }
-
-  function commitWheel() {
-    if (!wheel.input) return;
-    var v = wheel.vals[wheel.idx];
-    if (wheel.kind === "reps") wheel.setObj.reps = v;
-    else wheel.setObj.weight = v;
-    wheel.input.value = v;
-  }
-
-  (function wireWheelSheet() {
-    var col = document.getElementById("wheel-col");
-    col.addEventListener("scroll", function () {
-      clearTimeout(wireWheelSheet._h);
-      wireWheelSheet._h = setTimeout(markWheel, 60);
-    });
-    document.getElementById("wheel-done").addEventListener("click", function () {
-      commitWheel();
-      closeWheel();
-    });
-    document.getElementById("wheel-type").addEventListener("click", function () {
-      var input = wheel.input;
-      closeWheel();
-      if (!input) return;
-      // hand this one entry to the keyboard, then put the wheel back
-      input.removeAttribute("readonly");
-      input.focus();
-      input.select();
-      input.addEventListener("blur", function restore() {
-        input.removeEventListener("blur", restore);
-        input.setAttribute("readonly", "readonly");
-      });
-    });
-    document.getElementById("wheel-modal-overlay").addEventListener("click", function (e) {
-      if (e.target.id === "wheel-modal-overlay") { commitWheel(); closeWheel(); }
-    });
-  })();
-
-  function wireWheel(input, setObj, kind, cfg, metric) {
-    if (!input.hasAttribute("data-wheel")) return;
-    input.addEventListener("click", function () {
-      if (input.hasAttribute("readonly")) openWheel(input, setObj, kind, cfg, metric);
-    });
+  function applyTheme() {
+    var t = state.settings.theme === "dark" ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", t);
+    var meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute("content", THEME_BAR[t]);
   }
 
   /* ----------------------------- keyboard ----------------------------- */
@@ -2548,6 +3357,7 @@ import { loadState, saveState } from "./store.js";
 
   /* ----------------------------- boot ----------------------------- */
 
+  applyTheme();
   persist();
   renderHome();
 })();

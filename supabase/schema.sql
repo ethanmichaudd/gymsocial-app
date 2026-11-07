@@ -100,6 +100,17 @@ create table if not exists public.connections (
   check (user_a < user_b)   -- store each pair once, smaller id first
 );
 
+-- one reaction per person per workout: the key is the pair, so picking a
+-- different emoji updates the row instead of adding a second one
+create table if not exists public.reactions (
+  workout_id uuid not null references public.workouts(id) on delete cascade,
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  emoji text not null,
+  created_at timestamptz not null default now(),
+  primary key (workout_id, user_id)
+);
+create index if not exists reactions_workout_idx on public.reactions (workout_id);
+
 create table if not exists public.connection_requests (
   from_id uuid not null references public.profiles(id) on delete cascade,
   to_id uuid not null references public.profiles(id) on delete cascade,
@@ -120,6 +131,7 @@ alter table public.workout_sets        enable row level security;
 alter table public.follows             enable row level security;
 alter table public.connections         enable row level security;
 alter table public.connection_requests enable row level security;
+alter table public.reactions           enable row level security;
 
 -- Are these two connected? (pair stored smaller-id-first)
 create or replace function public.is_connected(a uuid, b uuid)
@@ -213,6 +225,19 @@ create policy "connections readable" on public.connections
   for select using (auth.role() = 'authenticated');
 create policy "remove your connection" on public.connections
   for delete using (auth.uid() in (user_a, user_b));
+
+-- reactions: visible wherever the workout is, and you only own your own
+create policy "read reactions you can see" on public.reactions
+  for select using (exists (
+    select 1 from public.workouts w
+    where w.id = workout_id and public.can_view(w.user_id)
+  ));
+create policy "react as yourself" on public.reactions
+  for insert with check (user_id = auth.uid());
+create policy "change your own reaction" on public.reactions
+  for update using (user_id = auth.uid()) with check (user_id = auth.uid());
+create policy "remove your own reaction" on public.reactions
+  for delete using (user_id = auth.uid());
 
 -- requests: sender and recipient can see; recipient accepts by inserting
 -- into connections (do that in an edge function or a trigger for safety)
