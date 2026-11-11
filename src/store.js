@@ -907,26 +907,22 @@ export async function setUsername(raw) {
   if (!USERNAME_RULE.test(name)) {
     throw new Error("Use 3–20 lowercase letters, numbers, _ or .");
   }
-  // For username accounts the login moves with the handle, login first: if
-  // that name is taken the auth change fails before anything is touched.
-  const oldEmail = sync.user.email;
-  const movesLogin = usesUsernameLogin(sync.user);
-  if (movesLogin) {
-    const au = await supabase.auth.updateUser({ email: loginEmail(name) });
-    if (au.error) {
-      if (/already|registered|exists/i.test(au.error.message)) throw new Error("@" + name + " is taken. Try another.");
-      throw au.error;
-    }
-    sync.user.email = loginEmail(name);
-  }
-  const { error } = await supabase.from("profiles").update({ username: name }).eq("id", sync.user.id);
+  // The rename happens in one database function (supabase/005_change_username.sql):
+  // profile and, for username accounts, the login move together. Changing the
+  // login through supabase.auth.updateUser fails -- Supabase rejects
+  // users.gymsocial.app as an address that can't receive mail.
+  const { error } = await supabase.rpc("change_username", { new_name: name });
   if (error) {
-    if (movesLogin) {             // put the login back so it still matches
-      await supabase.auth.updateUser({ email: oldEmail });
-      sync.user.email = oldEmail;
-    }
     if (error.code === "23505") throw new Error("@" + name + " is taken. Try another.");
+    if (error.code === "PGRST202" || /change_username/.test(error.message || "")) {
+      throw new Error("Username changes need a quick database update. Run supabase/005_change_username.sql.");
+    }
     throw error;
+  }
+  if (usesUsernameLogin(sync.user)) {
+    sync.user.email = loginEmail(name);
+    // pick up the new login in this phone's session too
+    try { await supabase.auth.refreshSession(); } catch (e) { /* next sign-in will */ }
   }
   const state = sync.getState();
   state.me.handle = name;
