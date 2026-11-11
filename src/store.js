@@ -9,9 +9,9 @@
  * The rest of the app still only calls loadState / saveState. It never has
  * to know whether the cloud is there.
  *
- * What syncs right now: your profile and settings, your gyms, your
- * exercises, your workouts (with their sets and photo). Friends, follows
- * and reactions stay on this device until step 3 (the feed).
+ * What syncs: your profile and settings, your gyms, your exercises, your
+ * workouts (with their sets and photo), plus the social side — friends,
+ * friend requests, friends' recent workouts and everyone's reactions.
  */
 
 import { createClient } from "@supabase/supabase-js";
@@ -160,6 +160,7 @@ export function syncNow() {
   return runExclusive(async () => {
     await pushAll();
     await pullAll();
+    await pullSocial();
   });
 }
 
@@ -563,7 +564,7 @@ function workoutFromRow(r, state) {
   return {
     id: r.id,
     userId: r.user_id,
-    userName: state.me.name,
+    userName: ((state.users || []).find((u) => u.id === r.user_id) || state.me).name,
     gymId: r.gym_id,
     title: r.title,
     performedAt: new Date(r.performed_at).toISOString(),
@@ -638,4 +639,235 @@ export function shrinkPhoto(file, maxSide = 1280) {
 /** What to put in an <img src> for a workout's photo, or null. */
 export function photoSrc(w) {
   return (w && (w.photoData || w.photoUrl)) || null;
+}
+
+/* =========================================================================
+   Friends
+   A friend is a row in connections (mutual). Getting there takes a request
+   that the other person accepts. Removing a friend deletes only that row:
+   their workouts stay in their account, they just leave your feed.
+   ========================================================================= */
+
+const FEED_DAYS = 120;          // how far back friends' workouts are fetched
+const SOCIAL_MIN_GAP = 30000;   // don't re-fetch the feed more than every 30s
+const DEMO_USERS = ["demo_friend", "demo_friend_2"];
+
+export const USERNAME_RULE = /^[a-z0-9_.]{3,20}$/;
+
+function userFromProfile(p) {
+  return {
+    id: p.id,
+    name: p.display_name || p.username,
+    handle: p.username,
+    avatar: p.avatar || null,
+    isPrivate: Boolean(p.is_private),
+  };
+}
+
+/* Supabase's `in` filter goes in the URL, so long id lists go in batches. */
+async function selectIn(table, columns, field, ids, extra) {
+  const out = [];
+  for (let i = 0; i < ids.length; i += 100) {
+    let q = supabase.from(table).select(columns).in(field, ids.slice(i, i + 100));
+    if (extra) q = extra(q);
+    const { data, error } = await q;
+    if (error) throw error;
+    out.push(...data);
+  }
+  return out;
+}
+
+/** The stand-in friends were only there to fill the screen before accounts. */
+function purgeDemo(state) {
+  const gone = new Set(DEMO_USERS);
+  state.users = (state.users || []).filter((u) => !gone.has(u.id));
+  state.follows = (state.follows || []).filter((f) => !gone.has(f[1]));
+  state.workouts = (state.workouts || []).filter((w) => !gone.has(w.userId));
+  state.workouts.forEach((w) => {
+    Object.keys(w.reactions || {}).forEach((e) => {
+      w.reactions[e] = w.reactions[e].filter((id) => !gone.has(id));
+      if (!w.reactions[e].length) delete w.reactions[e];
+    });
+  });
+}
+
+/** Friends, requests, friends' workouts and every reaction on screen. */
+async function pullSocial() {
+  const state = sync.getState();
+  const uid = sync.user.id;
+  purgeDemo(state);
+
+  const [conns, reqs] = await Promise.all([
+    supabase.from("connections").select("user_a,user_b").or(`user_a.eq.${uid},user_b.eq.${uid}`),
+    supabase.from("connection_requests").select("from_id,to_id,created_at")
+      .or(`from_id.eq.${uid},to_id.eq.${uid}`).order("created_at", { ascending: false }),
+  ]);
+  if (conns.error) throw conns.error;
+  if (reqs.error) throw reqs.error;
+
+  const friendIds = conns.data.map((c) => (c.user_a === uid ? c.user_b : c.user_a));
+  const incoming = reqs.data.filter((r) => r.to_id === uid).map((r) => r.from_id);
+  const outgoing = reqs.data.filter((r) => r.from_id === uid).map((r) => r.to_id);
+
+  // ---- people ----
+  const people = [...new Set([...friendIds, ...incoming, ...outgoing])];
+  const profiles = people.length
+    ? await selectIn("profiles", "id,username,display_name,avatar,is_private", "id", people)
+    : [];
+  const meRow = (state.users || []).find((u) => u.id === uid) ||
+    { id: uid, name: state.me.name, handle: state.me.handle, avatar: state.me.avatar, isPrivate: state.me.isPrivate };
+  state.users = [meRow].concat(profiles.map(userFromProfile));
+  state.follows = friendIds.map((f) => [uid, f]);
+  state.connections = friendIds.map((f) => [uid, f]);
+  state.friendRequests = { incoming, outgoing };
+
+  // ---- friends' recent workouts ----
+  let theirs = [];
+  if (friendIds.length) {
+    const since = new Date(Date.now() - FEED_DAYS * 864e5).toISOString();
+    const rows = await selectIn("workouts", "*, workout_exercises(*, workout_sets(*))", "user_id", friendIds,
+      (q) => q.gte("performed_at", since).order("performed_at", { ascending: false }).limit(500));
+    theirs = rows.map((r) => workoutFromRow(r, state));
+  }
+  const before = new Map(state.workouts.filter((w) => w.userId !== uid).map((w) => [w.id, w]));
+  theirs.forEach((w) => {
+    const old = before.get(w.id);
+    if (old && old.photoPath === w.photoPath && old.photoUrl) {
+      w.photoUrl = old.photoUrl;
+      w.photoUrlExpires = old.photoUrlExpires;
+    }
+  });
+  state.workouts = state.workouts.filter((w) => w.userId === uid).concat(theirs);
+
+  // ---- the gyms and exercise names their workouts mention ----
+  // Kept apart from yours so they never show up in your own pickers.
+  const myGyms = new Set(state.gyms.map((g) => g.id));
+  const gymIds = [...new Set(theirs.map((w) => w.gymId).filter((id) => id && !myGyms.has(id)))];
+  state.foreignGyms = gymIds.length
+    ? (await selectIn("gyms", "id,name,street,city,state", "id", gymIds))
+        .map((r) => ({ id: r.id, name: r.name, street: r.street || "", city: r.city || "", state: r.state || "" }))
+    : [];
+
+  const myEx = new Set(state.exercises.map((e) => e.id));
+  const exIds = [...new Set(theirs.flatMap((w) => w.exercises.map((b) => b.exerciseId)).filter((id) => !myEx.has(id)))];
+  state.foreignExercises = exIds.length
+    ? (await selectIn("exercises", "id,name,category,metric", "id", exIds))
+        .map((r) => ({ id: r.id, name: r.name, category: r.category || "other", metric: r.metric }))
+    : [];
+
+  // ---- reactions: one per person per workout ----
+  const wkIds = state.workouts.map((w) => w.id).filter(isUuid);
+  const reacts = wkIds.length
+    ? await selectIn("reactions", "workout_id,user_id,emoji", "workout_id", wkIds)
+    : [];
+  const byWorkout = {};
+  reacts.forEach((r) => {
+    const all = (byWorkout[r.workout_id] = byWorkout[r.workout_id] || {});
+    (all[r.emoji] = all[r.emoji] || []).push(r.user_id);
+  });
+  state.workouts.forEach((w) => { w.reactions = byWorkout[w.id] || {}; });
+
+  await refreshPhotoUrls(state);
+  persistLocal(state);
+  sync.lastSocial = Date.now();
+  if (sync.onChange) sync.onChange();
+}
+
+/** Re-fetch the social side. Throttled unless `force` (after you act). */
+export async function refreshSocial(force) {
+  if (!sync.user) return;
+  if (!force && Date.now() - (sync.lastSocial || 0) < SOCIAL_MIN_GAP) return;
+  if (sync.running) { try { await sync.running; } catch (e) { /* its own error */ } }
+  return runExclusive(pullSocial);
+}
+
+/** Find people by username (or display name). Excludes you. */
+export async function searchPeople(query) {
+  const q = String(query || "").trim().toLowerCase().replace(/^@/, "");
+  if (q.length < 2) return [];
+  // _ is a wildcard to LIKE, so escape it; strip anything a username can't hold
+  const handle = q.replace(/[^a-z0-9_.]/g, "").replace(/_/g, "\\_");
+  const name = q.replace(/[%_\\]/g, "");
+  const cols = "id,username,display_name,avatar,is_private";
+  const [a, b] = await Promise.all([
+    handle ? supabase.from("profiles").select(cols).ilike("username", handle + "%").neq("id", sync.user.id).limit(15)
+           : Promise.resolve({ data: [] }),
+    name ? supabase.from("profiles").select(cols).ilike("display_name", "%" + name + "%").neq("id", sync.user.id).limit(15)
+         : Promise.resolve({ data: [] }),
+  ]);
+  if (a.error) throw a.error;
+  if (b.error) throw b.error;
+  const seen = new Set();
+  return [...a.data, ...b.data]
+    .filter((p) => !seen.has(p.id) && seen.add(p.id))
+    .map(userFromProfile);
+}
+
+export async function sendFriendRequest(userId) {
+  const reqs = sync.getState().friendRequests || { incoming: [] };
+  // they already asked you: sending back just means yes
+  if (reqs.incoming.includes(userId)) return acceptFriendRequest(userId);
+  const { error } = await supabase.from("connection_requests")
+    .insert({ from_id: sync.user.id, to_id: userId });
+  if (error && error.code !== "23505") throw error;   // 23505: already sent
+  await refreshSocial(true);
+}
+
+export async function acceptFriendRequest(userId) {
+  const { error } = await supabase.rpc("accept_friend_request", { requester: userId });
+  if (error) throw error;
+  await refreshSocial(true);
+}
+
+export async function declineFriendRequest(userId) {
+  const { error } = await supabase.from("connection_requests").delete()
+    .eq("from_id", userId).eq("to_id", sync.user.id);
+  if (error) throw error;
+  await refreshSocial(true);
+}
+
+export async function cancelFriendRequest(userId) {
+  const { error } = await supabase.from("connection_requests").delete()
+    .eq("from_id", sync.user.id).eq("to_id", userId);
+  if (error) throw error;
+  await refreshSocial(true);
+}
+
+/** Ends the friendship. Their account and workouts are untouched. */
+export async function removeFriend(userId) {
+  const [a, b] = [sync.user.id, userId].sort();
+  const { error } = await supabase.from("connections").delete().eq("user_a", a).eq("user_b", b);
+  if (error) throw error;
+  await refreshSocial(true);
+}
+
+/** One reaction per person per workout; null takes yours off. */
+export async function setReaction(workoutId, emoji) {
+  if (!sync.user || !isUuid(workoutId)) return;
+  const res = emoji
+    ? await supabase.from("reactions").upsert(
+        { workout_id: workoutId, user_id: sync.user.id, emoji },
+        { onConflict: "workout_id,user_id" })
+    : await supabase.from("reactions").delete()
+        .eq("workout_id", workoutId).eq("user_id", sync.user.id);
+  if (res.error) throw res.error;
+}
+
+/** Your @handle — how friends find you. */
+export async function setUsername(raw) {
+  const name = String(raw || "").trim().toLowerCase().replace(/^@/, "");
+  if (!USERNAME_RULE.test(name)) {
+    throw new Error("Use 3–20 lowercase letters, numbers, _ or .");
+  }
+  const { error } = await supabase.from("profiles").update({ username: name }).eq("id", sync.user.id);
+  if (error) {
+    if (error.code === "23505") throw new Error("@" + name + " is taken. Try another.");
+    throw error;
+  }
+  const state = sync.getState();
+  state.me.handle = name;
+  const meRow = (state.users || []).find((u) => u.id === sync.user.id);
+  if (meRow) meRow.handle = name;
+  persistLocal(state);
+  return name;
 }

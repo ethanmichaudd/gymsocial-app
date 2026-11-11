@@ -102,11 +102,6 @@
         <div><h1>Friends</h1><p id="friends-sub"></p></div>
         <button class="modal-close is-link" id="friends-manage">Manage</button>
       </div>
-      <div class="day-nav">
-        <button class="cal-nav" id="friends-prev" aria-label="Previous day">&lsaquo;</button>
-        <span class="day-nav-label" id="friends-day"></span>
-        <button class="cal-nav" id="friends-next" aria-label="Next day">&rsaquo;</button>
-      </div>
       <div id="friends-feed"></div>
     </section>
 
@@ -265,6 +260,48 @@
   <button class="kb-chip" data-bump="1"></button>
   <button class="kb-chip" data-bump="2"></button>
   <button class="kb-chip is-done" id="kb-done">Done</button>
+</div>
+
+<!-- SIGN IN -->
+<div class="auth-page" id="auth-page" hidden>
+  <button class="auth-close" id="auth-close" aria-label="Close">
+    <svg viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+  </button>
+  <div class="auth-inner">
+    <div class="auth-brand">
+      <div class="auth-logo">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="2.2" stroke-linecap="round"><path d="M6.5 7v10M4 9.5v5M17.5 7v10M20 9.5v5M6.5 12h11"/></svg>
+      </div>
+      <div class="auth-wordmark">Gym<span>Social</span></div>
+    </div>
+
+    <h1 class="auth-title" id="auth-title">Welcome back</h1>
+    <p class="auth-sub" id="auth-sub"></p>
+
+    <div class="auth-tabs" role="tablist">
+      <button type="button" data-auth-mode="signin" class="is-on">Sign in</button>
+      <button type="button" data-auth-mode="signup">Create account</button>
+    </div>
+
+    <form id="auth-form" novalidate>
+      <label class="auth-field">
+        <span>Email</span>
+        <input type="email" id="auth-email" placeholder="you@example.com" autocomplete="email" autocapitalize="off" autocorrect="off" spellcheck="false" inputmode="email">
+      </label>
+      <label class="auth-field">
+        <span>Password</span>
+        <span class="auth-pw">
+          <input type="password" id="auth-password" placeholder="6+ characters" autocomplete="current-password">
+          <button type="button" id="auth-show">Show</button>
+        </span>
+      </label>
+      <p class="auth-note" id="auth-note" role="alert"></p>
+      <button type="submit" class="btn btn-primary btn-block auth-submit" id="auth-submit">Sign in</button>
+    </form>
+
+    <p class="auth-switch" id="auth-switch"></p>
+    <p class="auth-fine">Workouts already on this phone are added to your account.</p>
+  </div>
 </div>
 
 <div class="modal-overlay is-dialog" id="confirm-overlay" style="z-index:40;">

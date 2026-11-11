@@ -1,6 +1,8 @@
 import {
   loadState, saveState, cloudEnabled, currentUser, startSync, syncNow, syncStatus,
-  signIn, signUp, signOut, newId, shrinkPhoto, photoSrc
+  signIn, signUp, signOut, newId, shrinkPhoto, photoSrc,
+  refreshSocial, searchPeople, sendFriendRequest, acceptFriendRequest, declineFriendRequest,
+  cancelFriendRequest, removeFriend, setReaction, setUsername, USERNAME_RULE
 } from "./store.js";
 
 (function () {
@@ -214,8 +216,12 @@ import {
         schemaVersion: SCHEMA_VERSION
       }
     };
-    addDemoFriend(fresh);      // so the Friends page has something in it
-    addDemoFriend2(fresh);
+    // the stand-ins only ever existed for the signed-out preview; a signed-in
+    // account has real friends (sync clears any left over from before)
+    if (!currentUser()) {
+      addDemoFriend(fresh);
+      addDemoFriend2(fresh);
+    }
     return fresh;
   }
 
@@ -381,6 +387,11 @@ import {
       buzz(12);
     }
     persist();
+    if (currentUser()) {
+      setReaction(wk.id, had !== emoji ? emoji : null).catch(function () {
+        showToast("Couldn't save your reaction. Check your connection.");
+      });
+    }
   }
 
   function reactionBarHtml(wk) {
@@ -477,8 +488,16 @@ import {
     saveState(STORAGE_KEY, state);
   }
 
-  function findExercise(id) { return state.exercises.filter(function (e) { return e.id === id; })[0]; }
-  function findGym(id) { return state.gyms.filter(function (g) { return g.id === id; })[0]; }
+  /* Your catalogue first; then names pulled in for friends' workouts, which
+     are kept apart so they never appear in your own pickers. */
+  function findExercise(id) {
+    var byId = function (e) { return e.id === id; };
+    return state.exercises.filter(byId)[0] || (state.foreignExercises || []).filter(byId)[0];
+  }
+  function findGym(id) {
+    var byId = function (g) { return g.id === id; };
+    return state.gyms.filter(byId)[0] || (state.foreignGyms || []).filter(byId)[0];
+  }
 
   /* Two ways to say the same gym: the short label that goes everywhere a gym
      is named, and the full address for the screens that have room for it. */
@@ -535,7 +554,11 @@ import {
 
   /* One-way: whose sessions reach your home screen. Mutual connections, which
      are what unlock a private log, arrive with real accounts. */
+  /* Signed out, there is nobody to show: friends are accounts. */
+  function signedOut() { return cloudEnabled() && !currentUser(); }
+
   function friendsOf(userId) {
+    if (signedOut()) return [];
     return (state.follows || [])
       .filter(function (f) { return f[0] === userId; })
       .map(function (f) { return findUser(f[1]); })
@@ -822,6 +845,7 @@ import {
     return out;
   }
 
+  var FRIENDS_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8.5" r="3.2"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0"/><path d="M16 5.6a3.2 3.2 0 0 1 0 5.8"/><path d="M17.5 14.2a5.5 5.5 0 0 1 3 4.8"/></svg>';
   var FLAME_SVG = '<svg class="streak-flame" viewBox="0 0 24 24"><path d="M12.5 2c.4 3-1.3 4.6-2.7 6C8.2 9.5 7 11 7 13.4A5.6 5.6 0 0 0 12.6 19a5.4 5.4 0 0 0 5.4-5.5c0-3.4-2.3-5-3.4-7.3-.4.9-1 1.5-1.7 2 .4-2.2-.1-4.6-.4-6.2Z"/></svg>';
 
   function streakUnit(mode) {
@@ -1113,55 +1137,110 @@ import {
     }
     return '<div class="setting-block">' +
       '<label class="field-label">Account</label>' +
-      '<div class="auth-form">' +
-        '<input type="email" id="auth-email" placeholder="Email" autocomplete="email" autocapitalize="off">' +
-        '<input type="password" id="auth-password" placeholder="Password (6+ characters)" autocomplete="current-password">' +
-      '</div>' +
+      '<p class="setting-help" style="margin-top:0;">Sign in to back up your workouts, use them on any phone, and see your friends.</p>' +
       '<div class="action-row" style="margin-bottom:0;">' +
-        '<button class="btn btn-primary" id="sign-in-btn">Sign in</button>' +
-        '<button class="btn btn-ghost" id="sign-up-btn">Create account</button>' +
+        '<button class="btn btn-primary" data-open-auth="signin">Sign in</button>' +
+        '<button class="btn btn-ghost" data-open-auth="signup">Create account</button>' +
       '</div>' +
-      '<p class="setting-help" id="auth-note">Sign in to back up your workouts, use them on any phone, and add photos. ' +
-        'Everything already on this phone gets added to your account.</p>' +
     '</div>';
   }
 
-  function wireAccount(el) {
-    var note = el.querySelector("#auth-note");
-    function creds() {
-      var email = el.querySelector("#auth-email").value.trim();
-      var pw = el.querySelector("#auth-password").value;
-      if (!email || !pw) { note.textContent = "Enter your email and a password."; return null; }
-      return { email: email, pw: pw };
-    }
-    function busy(on) {
-      ["#sign-in-btn", "#sign-up-btn"].forEach(function (id) {
-        var b = el.querySelector(id); if (b) b.disabled = on;
-      });
-    }
+  /* ----------------------------- sign-in page ----------------------------- */
 
-    var inBtn = el.querySelector("#sign-in-btn");
-    if (inBtn) inBtn.addEventListener("click", function () {
-      var c = creds(); if (!c) return;
-      busy(true);
-      signIn(c.email, c.pw)
-        .then(function () { showToast("Signed in. Syncing your workouts."); })
-        .catch(function (err) { note.textContent = err.message || "Couldn't sign in."; busy(false); });
+  /* A full screen of its own rather than a form in Settings: it is the first
+     thing a friend sees when you send them the link. */
+  var authMode = "signin";
+
+  function setAuthMode(mode) {
+    authMode = mode;
+    var up = mode === "signup";
+    document.getElementById("auth-title").textContent = up ? "Create your account" : "Welcome back";
+    document.getElementById("auth-sub").textContent = up
+      ? "Log your workouts and see when your friends train."
+      : "Sign in to see your friends and sync your workouts.";
+    document.getElementById("auth-submit").textContent = up ? "Create account" : "Sign in";
+    document.getElementById("auth-password").setAttribute("autocomplete", up ? "new-password" : "current-password");
+    document.getElementById("auth-switch").innerHTML = up
+      ? 'Already have an account? <button type="button" data-auth-mode="signin">Sign in</button>'
+      : 'New to GymSocial? <button type="button" data-auth-mode="signup">Create an account</button>';
+    document.querySelectorAll(".auth-tabs [data-auth-mode]").forEach(function (b) {
+      b.classList.toggle("is-on", b.getAttribute("data-auth-mode") === mode);
     });
+    authNote("");
+  }
 
-    var upBtn = el.querySelector("#sign-up-btn");
-    if (upBtn) upBtn.addEventListener("click", function () {
-      var c = creds(); if (!c) return;
-      busy(true);
-      signUp(c.email, c.pw)
-        .then(function (needsConfirm) {
-          busy(false);
-          if (needsConfirm) note.textContent = "Check your email for a confirmation link, then come back here and sign in.";
-          else showToast("Account created. Syncing your workouts.");
+  function authNote(text, ok) {
+    var n = document.getElementById("auth-note");
+    n.textContent = text;
+    n.classList.toggle("is-ok", !!ok);
+  }
+
+  function openAuth(mode) {
+    setAuthMode(mode || "signin");
+    document.getElementById("auth-page").hidden = false;
+    document.body.classList.add("auth-open");
+  }
+
+  function closeAuth() {
+    document.getElementById("auth-page").hidden = true;
+    document.body.classList.remove("auth-open");
+    document.getElementById("auth-password").value = "";
+  }
+
+  document.addEventListener("click", function (e) {
+    var opener = e.target.closest("[data-open-auth]");
+    if (opener) { openAuth(opener.getAttribute("data-open-auth")); return; }
+    var switcher = e.target.closest("#auth-page [data-auth-mode]");
+    if (switcher) setAuthMode(switcher.getAttribute("data-auth-mode"));
+  });
+
+  document.getElementById("auth-close").addEventListener("click", closeAuth);
+
+  document.getElementById("auth-show").addEventListener("click", function () {
+    var pw = document.getElementById("auth-password");
+    var show = pw.type === "password";
+    pw.type = show ? "text" : "password";
+    this.textContent = show ? "Hide" : "Show";
+  });
+
+  document.getElementById("auth-form").addEventListener("submit", function (e) {
+    e.preventDefault();
+    var email = document.getElementById("auth-email").value.trim();
+    var pw = document.getElementById("auth-password").value;
+    var btn = document.getElementById("auth-submit");
+    if (!email || !pw) { authNote("Enter your email and a password."); return; }
+    if (authMode === "signup" && pw.length < 6) { authNote("Use at least 6 characters for your password."); return; }
+    btn.disabled = true;
+    authNote("");
+    var done = function () { btn.disabled = false; };
+
+    if (authMode === "signin") {
+      signIn(email, pw)
+        .then(function () {
+          done();
+          closeAuth();
+          showToast("Signed in. Syncing your workouts.");
+          activateTab(currentTab === "settings" ? "settings" : currentTab);
         })
-        .catch(function (err) { note.textContent = err.message || "Couldn't create the account."; busy(false); });
-    });
+        .catch(function (err) { done(); authNote(err.message || "Couldn't sign in."); });
+    } else {
+      signUp(email, pw)
+        .then(function (needsConfirm) {
+          done();
+          if (needsConfirm) {
+            setAuthMode("signin");
+            authNote("Check your email for a confirmation link, then sign in here.", true);
+          } else {
+            closeAuth();
+            showToast("Account created. Syncing your workouts.");
+            activateTab(currentTab);
+          }
+        })
+        .catch(function (err) { done(); authNote(err.message || "Couldn't create the account."); });
+    }
+  });
 
+  function wireAccount(el) {
     var nowBtn = el.querySelector("#sync-now-btn");
     if (nowBtn) nowBtn.addEventListener("click", function () { syncNow(); });
 
@@ -1520,112 +1599,91 @@ import {
 
   /* ----------------------------- friends ----------------------------- */
 
-  /* A page of its own: everyone you follow, newest first, grouped by day so
-     a busy week still reads as a list rather than a wall. */
-  /* Which day the Friends page is showing. One day at a time keeps the page
-     the same size however many people you follow; the arrows move it. */
-  var friendsDay = new Date();
+  /* The feed: everyone you follow, newest first, under day headings. Home's
+     calendar answers "what happened on this day"; this answers "what's new".
+     It loads a page at a time so a long history never renders all at once. */
+  var FEED_PAGE = 20;
+  var feedShown = FEED_PAGE;
 
   function dayLabelFor(d) {
     var key = localDayKey(d.toISOString());
-    var today = new Date();
     var yesterday = new Date();
     yesterday.setDate(yesterday.getDate() - 1);
-    if (key === localDayKey(today.toISOString())) return "Today";
+    if (key === localDayKey(new Date().toISOString())) return "Today";
     if (key === localDayKey(yesterday.toISOString())) return "Yesterday";
     return calendarDate(d.toISOString());
   }
 
   function renderFriends() {
     var friends = friendsOf(state.me.id);
-    var subEl = document.getElementById("friends-sub");
     var el = document.getElementById("friends-feed");
-    var nav = document.querySelector(".day-nav");
 
-    subEl.textContent = friends.length
-      ? friends.length + (friends.length === 1 ? " friend" : " friends") + " you follow"
+    var manageBtn = document.getElementById("friends-manage");
+    manageBtn.hidden = signedOut();
+    var waiting = ((state.friendRequests || {}).incoming || []).length;
+    manageBtn.textContent = waiting ? "Manage (" + waiting + ")" : "Manage";
+    if (!signedOut()) refreshSocial(false);   // throttled; redraws when it lands
+    if (signedOut()) {
+      document.getElementById("friends-sub").textContent = "";
+      el.innerHTML = '<div class="signin-card">' +
+        '<div class="signin-card-icon">' + FRIENDS_SVG + '</div>' +
+        '<div class="signin-card-title">No friends yet</div>' +
+        '<p class="signin-card-text">Sign in to add friends and see their workouts.</p>' +
+        '<button class="btn btn-primary btn-block" id="friends-sign-in" data-open-auth="signin">Sign in to see your friends</button>' +
+      '</div>';
+      return;
+    }
+
+    document.getElementById("friends-sub").textContent = friends.length
+      ? friends.length + (friends.length === 1 ? " friend" : " friends")
       : "";
 
     if (!friends.length) {
-      nav.hidden = true;
-      el.innerHTML = '<div class="empty-state">No friends yet. Once accounts are in, ' +
-        'the people you follow show up here.</div>';
+      el.innerHTML = '<div class="empty-state">No friends yet. Tap Manage to find people by username. ' +
+        'Their workouts show up here.</div>' +
+        (waiting ? '<button class="btn btn-primary btn-block" id="feed-requests">' + waiting +
+          (waiting === 1 ? " friend request" : " friend requests") + '</button>' : '');
+      var reqBtn = el.querySelector("#feed-requests");
+      if (reqBtn) reqBtn.addEventListener("click", openFriendsManage);
       return;
     }
-    nav.hidden = false;
-
-    var dayKeyWanted = localDayKey(friendsDay.toISOString());
-    var todayKey = localDayKey(new Date().toISOString());
-    document.getElementById("friends-day").textContent = dayLabelFor(friendsDay);
-    // there is nothing to see in the future
-    document.getElementById("friends-next").disabled = dayKeyWanted === todayKey;
 
     var rows = [];
     friends.forEach(function (u) {
-      workoutsOf(u.id).forEach(function (wk) {
-        if (localDayKey(wk.performedAt) === dayKeyWanted) rows.push({ user: u, wk: wk });
-      });
+      workoutsOf(u.id).forEach(function (wk) { rows.push({ user: u, wk: wk }); });
     });
-    rows.sort(function (a, b) {
-      return new Date(b.wk.performedAt) - new Date(a.wk.performedAt);
-    });
-
-    /* Everyone you follow, in one line: who trained on this day and who did
-       not. It answers the question the page is really for without making you
-       scroll, and it stays one line as the list grows. */
-    // rows are newest first, so the first one per person is their latest
-    var trained = {};
-    rows.forEach(function (r) {
-      (trained[r.user.id] = trained[r.user.id] || []).push(r.wk.id);
-    });
-    var nTrained = Object.keys(trained).length;
-
-    var strip = '<div class="friend-strip">' +
-      friends.map(function (u) {
-        var theirs = trained[u.id] || [];
-        return '<button class="friend-dot' + (theirs.length ? " is-on" : "") + '"' +
-          (theirs.length ? ' data-friend-wk="' + theirs[0] + '"' : " disabled") +
-          ' title="' + esc(u.name) +
-            (theirs.length > 1 ? " -- " + theirs.length + " sessions" : "") + '">' +
-          '<span class="friend-dot-av">' + avatarHtml(u) +
-            (theirs.length > 1
-              ? '<span class="friend-dot-count">' + theirs.length + '</span>' : '') +
-          '</span>' +
-          '<span class="friend-dot-name">' + esc(u.name.split(" ")[0]) + '</span>' +
-        '</button>';
-      }).join("") +
-      '</div>' +
-      '<p class="friend-tally">' +
-        (nTrained
-          ? '<strong>' + nTrained + '</strong> of ' + friends.length + ' trained' +
-            (dayKeyWanted === todayKey ? " today" : " that day")
-          : (dayKeyWanted === todayKey ? "Nobody has logged yet today" : "Nobody logged that day")) +
-      '</p>';
+    rows.sort(function (a, b) { return new Date(b.wk.performedAt) - new Date(a.wk.performedAt); });
 
     if (!rows.length) {
-      el.innerHTML = strip;
-      el.querySelectorAll("[data-friend-wk]").forEach(function (btn) {
-        btn.addEventListener("click", function () {
-          openWorkoutDetail(btn.getAttribute("data-friend-wk"));
-        });
-      });
+      el.innerHTML = '<div class="empty-state">None of your friends have logged anything yet.</div>';
       return;
     }
 
-    var html = strip;
-    rows.forEach(function (row) {
+    // how many sessions each person logged per day, to tag a second one as #2
+    var perDay = {};
+    rows.forEach(function (r) {
+      var k = r.user.id + "|" + localDayKey(r.wk.performedAt);
+      (perDay[k] = perDay[k] || []).push(r.wk.id);
+    });
+
+    var html = "";
+    var lastKey = null;
+    rows.slice(0, feedShown).forEach(function (row) {
+      var dayKey = localDayKey(row.wk.performedAt);
+      if (dayKey !== lastKey) {
+        html += '<div class="feed-day">' + esc(dayLabelFor(new Date(row.wk.performedAt))) + '</div>';
+        lastKey = dayKey;
+      }
       var gymObj = row.wk.gymId ? findGym(row.wk.gymId) : null;
       var exCount = row.wk.exercises.length;
-      var theirs = trained[row.user.id] || [];
-      // their sessions are newest first, so count back from the end
-      var nth = theirs.length > 1
-        ? (theirs.length - theirs.indexOf(row.wk.id)) : 0;
+      var same = perDay[row.user.id + "|" + dayKey];
+      var nth = same.length > 1 ? same.length - same.indexOf(row.wk.id) : 0;
       html += '<div class="friend-card">' +
         '<button class="friend-open" data-friend-wk="' + row.wk.id + '">' +
           avatarHtml(row.user) +
           '<span class="person-body">' +
             '<span class="person-name">' + esc(row.user.name) +
-              (nth ? '<span class="nth-tag">#' + nth + ' today</span>' : '') + '</span>' +
+              (nth ? '<span class="nth-tag">#' + nth + '</span>' : '') + '</span>' +
             '<span class="friend-what">' + esc(row.wk.title || "Workout") + '</span>' +
             '<span class="person-sub">' +
               [esc(formatTime(row.wk.performedAt)),
@@ -1644,6 +1702,9 @@ import {
         reactionBarHtml(row.wk) +
       '</div>';
     });
+    if (rows.length > feedShown) {
+      html += '<button class="btn btn-ghost btn-block" id="feed-more">Show more</button>';
+    }
     el.innerHTML = html;
 
     el.querySelectorAll("[data-friend-wk]").forEach(function (btn) {
@@ -1651,95 +1712,177 @@ import {
         openWorkoutDetail(btn.getAttribute("data-friend-wk"));
       });
     });
+    var more = el.querySelector("#feed-more");
+    if (more) more.addEventListener("click", function () {
+      feedShown += FEED_PAGE;
+      renderFriends();
+    });
     wireReactions(el, renderFriends);
   }
 
-  /* Managing who you follow belongs with the feed they appear in, not
-     buried in Settings. Removing someone takes their sessions with them --
-     locally there is no server for their log to stay on. */
-  function openFriendsManage() {
+  /* Friends are accounts: find someone by username, send a request, and
+     they're on your feed once they accept. Removing someone ends the
+     friendship only -- their workouts stay in their account. */
+  var manageSearch = "";
+  var manageResults = [];
+
+  function relationTo(id) {
+    var req = state.friendRequests || { incoming: [], outgoing: [] };
+    if (friendsOf(state.me.id).some(function (u) { return u.id === id; })) return "friend";
+    if (req.incoming.indexOf(id) !== -1) return "incoming";
+    if (req.outgoing.indexOf(id) !== -1) return "outgoing";
+    return "none";
+  }
+
+  function personRowHtml(u, actions) {
+    return '<div class="manage-row">' +
+      avatarHtml(u) +
+      '<span class="person-body">' +
+        '<span class="person-name">' + esc(u.name) + '</span>' +
+        '<span class="person-sub">@' + esc(u.handle || "") + '</span>' +
+      '</span>' +
+      '<span class="manage-acts">' + actions + '</span>' +
+    '</div>';
+  }
+
+  function actBtn(kind, id, label, cls) {
+    return '<button class="' + (cls || "manage-act") + '" data-act="' + kind + '" data-id="' + esc(id) + '">' +
+      label + '</button>';
+  }
+
+  function actionsFor(u) {
+    switch (relationTo(u.id)) {
+      case "friend":   return '<span class="manage-tag">Friends</span>';
+      case "incoming": return actBtn("accept", u.id, "Accept", "manage-act is-primary") +
+                              actBtn("decline", u.id, "Decline");
+      case "outgoing": return actBtn("cancel", u.id, "Requested");
+      default:         return actBtn("add", u.id, "Add", "manage-act is-primary");
+    }
+  }
+
+  function manageListsHtml() {
+    var req = state.friendRequests || { incoming: [], outgoing: [] };
     var friends = friendsOf(state.me.id);
-    var body =
-      '<div class="equip-add" style="margin-bottom:6px;">' +
-        '<input type="text" id="friend-new" placeholder="Name" autocomplete="off">' +
-        '<button class="btn btn-ghost" id="friend-add">Add</button>' +
-      '</div>' +
-      '<p class="setting-help" style="margin-top:6px;">Until accounts are in, this adds a ' +
-        'local friend with no sessions -- enough to see how the feed behaves.</p>' +
-      (friends.length
-        ? friends.map(function (u) {
-            var n = workoutsOf(u.id).length;
-            return '<div class="manage-row">' +
-              avatarHtml(u) +
-              '<span class="person-body">' +
-                '<span class="person-name">' + esc(u.name) + '</span>' +
-                '<span class="person-sub">' + n + (n === 1 ? " session" : " sessions") + '</span>' +
-              '</span>' +
-              '<button class="btn-danger-text manage-drop" data-drop-friend="' + esc(u.id) + '">Remove</button>' +
-            '</div>';
-          }).join("")
-        : '<div class="empty-state">Nobody yet.</div>');
+    var people = function (ids) { return ids.map(findUser).filter(Boolean); };
+    var html = "";
 
-    var el = openListSheet("Your friends", body);
+    var incoming = people(req.incoming);
+    if (incoming.length) {
+      html += '<div class="manage-head">Requests</div>' + incoming.map(function (u) {
+        return personRowHtml(u, actBtn("accept", u.id, "Accept", "manage-act is-primary") +
+          actBtn("decline", u.id, "Decline"));
+      }).join("");
+    }
 
-    var input = el.querySelector("#friend-new");
-    el.querySelector("#friend-add").addEventListener("click", function () {
-      var name = titleCase(input.value);
-      if (!name) { showToast("Give them a name."); return; }
-      var taken = friendsOf(state.me.id).some(function (u) {
-        return u.name.toLowerCase() === name.toLowerCase();
-      });
-      if (taken) { showToast("You already follow " + name + "."); return; }
-      var u = { id: uid("usr"), name: name, handle: name.toLowerCase().replace(/\s+/g, ""), isPrivate: false };
-      state.users.push(u);
-      state.follows.push([state.me.id, u.id]);
-      persist();
-      closeListSheet();
-      renderFriends();
-      openFriendsManage();
-      showToast("Following " + name + ".");
+    var outgoing = people(req.outgoing);
+    if (outgoing.length) {
+      html += '<div class="manage-head">Sent</div>' + outgoing.map(function (u) {
+        return personRowHtml(u, actBtn("cancel", u.id, "Cancel"));
+      }).join("");
+    }
+
+    html += '<div class="manage-head">Friends' + (friends.length ? ' (' + friends.length + ')' : '') + '</div>';
+    html += friends.length
+      ? friends.map(function (u) {
+          return personRowHtml(u, actBtn("remove", u.id, "Remove", "manage-drop"));
+        }).join("")
+      : '<div class="empty-state">Nobody yet. Search above to add someone.</div>';
+    return html;
+  }
+
+  function drawManage(el) {
+    var res = el.querySelector("#manage-results");
+    var q = manageSearch.trim();
+    res.innerHTML = q.length < 2 ? "" : (manageResults.length
+      ? manageResults.map(function (u) { return personRowHtml(u, actionsFor(u)); }).join("")
+      : '<p class="setting-help">No one with that username.</p>');
+    el.querySelector("#manage-lists").innerHTML = manageListsHtml();
+    wireManageActs(el);
+  }
+
+  function wireManageActs(el) {
+    el.querySelectorAll("[data-act]").forEach(function (btn) {
+      btn.onclick = function () {
+        var kind = btn.getAttribute("data-act");
+        var id = btn.getAttribute("data-id");
+        var u = findUser(id) || manageResults.filter(function (x) { return x.id === id; })[0] || { name: "them" };
+        var run = function (fn, done) {
+          btn.disabled = true;
+          fn(id)
+            .then(function () {
+              if (done) showToast(done);
+              drawManage(el);
+              renderFriends();
+              renderHome();
+            })
+            .catch(function (err) {
+              btn.disabled = false;
+              showToast((err && err.message) || "That didn't go through. Try again.");
+            });
+        };
+        if (kind === "add") run(sendFriendRequest, "Request sent to " + u.name + ".");
+        else if (kind === "accept") run(acceptFriendRequest, "You and " + u.name + " are friends.");
+        else if (kind === "decline") run(declineFriendRequest, null);
+        else if (kind === "cancel") run(cancelFriendRequest, "Request canceled.");
+        else if (kind === "remove") {
+          openConfirm({
+            title: "Remove " + u.name + "?",
+            body: "They come off your feed and you come off theirs. Their workouts stay in their account.",
+            confirmLabel: "Remove",
+            onConfirm: function () {
+              removeFriend(id)
+                .then(function () {
+                  openFriendsManage();
+                  renderFriends();
+                  renderHome();
+                  showToast("Removed " + u.name + ".");
+                })
+                .catch(function (err) { showToast((err && err.message) || "Couldn't remove them."); });
+            }
+          });
+        }
+      };
     });
+  }
 
-    el.querySelectorAll("[data-drop-friend]").forEach(function (btn) {
-      btn.addEventListener("click", function () {
-        var id = btn.getAttribute("data-drop-friend");
-        var u = findUser(id);
-        if (!u) return;
-        var n = workoutsOf(id).length;
-        openConfirm({
-          title: "Remove " + u.name + "?",
-          body: n
-            ? "They come off your feed and " + n + (n === 1 ? " session goes" : " sessions go") + " with them."
-            : "They come off your feed.",
-          confirmLabel: "Remove",
-          onConfirm: function () {
-            state.follows = state.follows.filter(function (f) { return f[1] !== id; });
-            state.users = state.users.filter(function (x) { return x.id !== id; });
-            state.workouts = state.workouts.filter(function (w) { return w.userId !== id; });
-            persist();
-            closeListSheet();
-            renderFriends();
-            renderHome();
-            openFriendsManage();
-            showToast("Removed " + u.name + ".");
-          }
-        });
-      });
+  function openFriendsManage() {
+    if (signedOut()) { openAuth("signin"); return; }
+    manageSearch = "";
+    manageResults = [];
+    var el = openListSheet("Friends",
+      '<p class="setting-help" style="margin-top:0;">You\'re <strong>@' + esc(state.me.handle || "") +
+        '</strong>. Friends find you by that; change it in Profile.</p>' +
+      '<input type="search" id="friend-search" placeholder="Search by username" ' +
+        'autocomplete="off" autocapitalize="off" spellcheck="false">' +
+      '<div id="manage-results"></div>' +
+      '<div id="manage-lists"></div>');
+    drawManage(el);
+
+    var input = el.querySelector("#friend-search");
+    var timer = null;
+    var asked = 0;
+    input.addEventListener("input", function () {
+      manageSearch = input.value;
+      clearTimeout(timer);
+      if (manageSearch.trim().length < 2) { manageResults = []; drawManage(el); return; }
+      timer = setTimeout(function () {
+        var mine = ++asked;
+        searchPeople(manageSearch)
+          .then(function (list) {
+            if (mine !== asked) return;      // a newer search already answered
+            manageResults = list;
+            drawManage(el);
+          })
+          .catch(function () { showToast("Search isn't working right now."); });
+      }, 300);
+    });
+    refreshSocial(true).then(function () {
+      if (document.getElementById("list-modal-overlay").classList.contains("open") &&
+          el.querySelector("#manage-lists")) drawManage(el);
     });
   }
 
   document.getElementById("friends-manage").addEventListener("click", openFriendsManage);
-
-  function shiftFriendsDay(delta) {
-    var d = new Date(friendsDay);
-    d.setDate(d.getDate() + delta);
-    if (d > new Date()) return;
-    friendsDay = d;
-    renderFriends();
-  }
-
-  document.getElementById("friends-prev").addEventListener("click", function () { shiftFriendsDay(-1); });
-  document.getElementById("friends-next").addEventListener("click", function () { shiftFriendsDay(1); });
 
   /* ----------------------------- a logged session ----------------------------- */
 
@@ -3291,7 +3434,7 @@ import {
     document.getElementById("gym-add-remove").addEventListener("click", function () {
       var g = gymEditing;
       if (!g) return;
-      var n = state.workouts.filter(function (w) { return w.gymId === g.id; }).length;
+      var n = myWorkouts().filter(function (w) { return w.gymId === g.id; }).length;
       openConfirm({
         title: "Remove " + g.name + "?",
         body: n
@@ -3300,7 +3443,7 @@ import {
           : "Nothing is checked in here yet.",
         confirmLabel: "Remove gym",
         onConfirm: function () {
-          state.workouts.forEach(function (w) { if (w.gymId === g.id) w.gymId = null; });
+          myWorkouts().forEach(function (w) { if (w.gymId === g.id) w.gymId = null; });
           state.gyms = state.gyms.filter(function (x) { return x.id !== g.id; });
           if (draft.gymId === g.id) draft.gymId = "";
           if (editDraft && editDraft.gymId === g.id) editDraft.gymId = "";
@@ -3469,8 +3612,11 @@ import {
     html += theirs.map(function (r) { return row(r.user, r.user.name, r.wk); }).join("");
 
     if (!friends.length) {
-      html += '<button class="home-day-row is-muted" id="day-add-friends">' +
-        '<span class="person-body"><span class="person-sub">Add friends to see who trained</span></span>' +
+      html += '<button class="home-day-row is-muted" id="day-add-friends"' +
+          (signedOut() ? ' data-open-auth="signin"' : '') + '>' +
+        '<span class="person-body"><span class="person-sub">' +
+          (signedOut() ? "Sign in to see who trained" : "Add friends to see who trained") +
+        '</span></span>' +
         '<span class="chevron">&rsaquo;</span></button>';
     } else if (!theirs.length) {
       html += '<div class="home-day-empty">' +
@@ -3490,7 +3636,7 @@ import {
       if (!isToday) showToast("Logging for " + calendarDate(iso) + ".");
     });
     var addBtn = el.querySelector("#day-add-friends");
-    if (addBtn) addBtn.addEventListener("click", function () { activateTab("friends"); });
+    if (addBtn && !signedOut()) addBtn.addEventListener("click", function () { activateTab("friends"); });
   }
 
   /* ----------------------------- profile ----------------------------- */
@@ -3508,11 +3654,13 @@ import {
     document.getElementById("profile-head").innerHTML =
       avatarHtml(me, "is-big") +
       '<div class="profile-name">' + esc(me.name) + '</div>' +
+      (currentUser() && me.handle ? '<div class="profile-handle">@' + esc(me.handle) + '</div>' : '') +
       '<div class="profile-actions">' +
         '<button class="btn btn-ghost" id="pick-photo">' +
           (me.avatar ? "Change photo" : "Add photo") + '</button>' +
         (me.avatar ? '<button class="btn btn-ghost" id="drop-photo">Remove</button>' : '') +
         '<button class="btn btn-ghost" id="rename-me">Rename</button>' +
+        (currentUser() ? '<button class="btn btn-ghost" id="set-username">Username</button>' : '') +
       '</div>';
 
     document.getElementById("profile-alltime").innerHTML = [
@@ -3536,6 +3684,8 @@ import {
       });
     }
     document.getElementById("rename-me").addEventListener("click", openRename);
+    var unameBtn = document.getElementById("set-username");
+    if (unameBtn) unameBtn.addEventListener("click", openUsername);
 
     renderGyms();
     renderProfileWorkouts(mine, true);
@@ -3546,7 +3696,7 @@ import {
   function openRename() {
     var el = openListSheet("Display name",
       '<input type="text" id="rename-input" value="' + esc(state.me.name) + '" placeholder="Your name">' +
-      '<p class="setting-help">Shown on your sessions, and to friends once accounts are in.</p>' +
+      '<p class="setting-help">Shown on your sessions and to your friends.</p>' +
       '<button class="btn btn-primary btn-block" id="rename-save">Save</button>');
 
     var input = el.querySelector("#rename-input");
@@ -3563,6 +3713,44 @@ import {
     });
   }
 
+
+  /* Your @handle is how friends search for you, so it gets the same rules
+     the database enforces: lowercase letters, numbers, _ and . only. */
+  function openUsername() {
+    var el = openListSheet("Username",
+      '<div class="handle-field"><span>@</span>' +
+        '<input type="text" id="username-input" value="' + esc(state.me.handle || "") + '" ' +
+          'autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="20"></div>' +
+      '<p class="setting-help" id="username-note">3\u201320 characters: lowercase letters, numbers, _ and . ' +
+        'Friends find you by this.</p>' +
+      '<button class="btn btn-primary btn-block" id="username-save">Save</button>');
+
+    var input = el.querySelector("#username-input");
+    var note = el.querySelector("#username-note");
+    var save = el.querySelector("#username-save");
+    input.focus();
+    input.addEventListener("input", function () {
+      // nudge toward a valid name as you type instead of rejecting it later
+      var clean = input.value.toLowerCase().replace(/[^a-z0-9_.]/g, "");
+      if (clean !== input.value) input.value = clean;
+    });
+    save.addEventListener("click", function () {
+      var v = input.value.trim();
+      if (v === state.me.handle) { closeListSheet(); return; }
+      if (!USERNAME_RULE.test(v)) { note.textContent = "Use 3\u201320 lowercase letters, numbers, _ or ."; return; }
+      save.disabled = true;
+      setUsername(v)
+        .then(function (name) {
+          closeListSheet();
+          renderProfile();
+          showToast("You're @" + name + " now.");
+        })
+        .catch(function (err) {
+          save.disabled = false;
+          note.textContent = (err && err.message) || "Couldn't save that. Try again.";
+        });
+    });
+  }
 
   function renderProfileWorkouts(theirWorkouts, isMe) {
     var query = (document.getElementById("profile-search").value || "").trim();
@@ -3798,6 +3986,7 @@ import {
   /* Accounts + sync. After a pull brings in changes from another phone,
      redraw whatever is on screen -- except mid-edit, where it would wipe
      what you're typing. */
+  var wasAuthed = false;
   startSync({
     getState: function () { return state; },
     onChange: function () {
@@ -3806,6 +3995,12 @@ import {
       activateTab(currentTab);
     },
     onStatus: function () {
+      var authed = !!currentUser();
+      if (authed !== wasAuthed) {
+        wasAuthed = authed;
+        if (!editingId && currentTab !== "log") activateTab(currentTab);
+        return;
+      }
       var line = document.getElementById("sync-line");
       if (line) line.textContent = syncLine();
       else if (currentTab === "settings") renderSettings();

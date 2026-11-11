@@ -785,60 +785,13 @@
   }
 
   /* ---------- friends ---------- */
-  .day-nav {
-    display: flex; align-items: center; justify-content: space-between;
-    gap: 10px; margin-bottom: 14px;
+  /* day headings between groups in the feed */
+  .feed-day {
+    font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--text-faint); margin: 18px 2px 8px;
   }
-  .day-nav-label { font-weight: 700; font-size: 15px; }
-
-  /* the day sheet: your sessions, then everyone else's */
-  .day-section {
-    font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase;
-    color: var(--text-faint); margin: 16px 0 8px;
-  }
-  .day-section:first-child { margin-top: 2px; }
-
-  /* who trained on this day, at a glance */
-  .friend-strip {
-    display: flex; gap: 14px; overflow-x: auto; padding-bottom: 2px;
-    scrollbar-width: none;
-  }
-  .friend-strip::-webkit-scrollbar { display: none; }
-  .friend-dot {
-    flex: 0 0 auto; display: flex; flex-direction: column; align-items: center; gap: 5px;
-    background: none; border: none; padding: 0; cursor: pointer; font-family: inherit;
-    width: 56px;
-  }
-  .friend-dot[disabled] { cursor: default; opacity: 0.45; }
-  .friend-dot-av { position: relative; display: block; }
-  /* someone who trained twice gets a count rather than a second avatar */
-  .friend-dot-count {
-    position: absolute; top: -2px; right: -2px;
-    min-width: 19px; height: 19px; padding: 0 4px;
-    background: var(--accent); color: var(--on-accent);
-    border: 2px solid var(--bg); border-radius: 999px;
-    font-size: 10.5px; font-weight: 700; line-height: 15px; text-align: center;
-  }
-  .friend-dot .avatar {
-    width: 46px; height: 46px; font-size: 15px;
-    background: var(--surface-2); color: var(--text-muted);
-    border: 2px solid transparent;
-  }
-  .friend-dot.is-on .avatar {
-    background: var(--accent-bg); color: var(--accent-strong);
-    border-color: var(--accent);
-  }
-  .friend-dot-name {
-    font-size: 11px; color: var(--text-muted); max-width: 56px;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  }
-  .friend-dot.is-on .friend-dot-name { color: var(--text); font-weight: 600; }
-  .friend-tally {
-    font-size: 12.5px; color: var(--text-muted);
-    margin: 10px 0 16px; padding-bottom: 14px;
-    border-bottom: 1px solid var(--border-soft);
-  }
-  .friend-tally strong { color: var(--text); }
+  .feed-day:first-child { margin-top: 4px; }
+  #feed-more { margin-top: 6px; }
 
   .manage-row {
     display: flex; align-items: center; gap: 11px;
@@ -1204,3 +1157,107 @@
     width: 52px; height: 52px; flex: 0 0 auto; align-self: center;
     object-fit: cover; border-radius: var(--radius-sm); margin-left: 8px;
   }
+
+  /* ---------- sign-in page ---------- */
+  .auth-page {
+    position: fixed; inset: 0; z-index: 60; overflow-y: auto;
+    background: var(--bg);
+    padding: calc(env(safe-area-inset-top) + 12px) 24px calc(env(safe-area-inset-bottom) + 28px);
+  }
+  .auth-page[hidden] { display: none; }
+  body.auth-open { overflow: hidden; }
+  .auth-close {
+    position: absolute; top: calc(env(safe-area-inset-top) + 12px); right: 16px;
+    width: 38px; height: 38px; border-radius: 50%; border: none; cursor: pointer;
+    background: var(--surface-2); display: flex; align-items: center; justify-content: center;
+  }
+  .auth-close svg { width: 18px; height: 18px; stroke: var(--text-muted); }
+  .auth-inner { max-width: 400px; margin: 0 auto; padding-top: max(8vh, 48px); }
+  .auth-brand { display: flex; align-items: center; gap: 12px; }
+  .auth-logo {
+    width: 52px; height: 52px; border-radius: 15px; flex-shrink: 0;
+    background: var(--accent); display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 8px 20px -8px var(--accent);
+  }
+  .auth-logo svg { width: 30px; height: 30px; stroke: var(--on-accent); }
+  .auth-wordmark { font-size: 22px; font-weight: 800; letter-spacing: -0.02em; color: var(--text); }
+  .auth-wordmark span { color: var(--accent); }
+  .auth-title { font-size: 30px; font-weight: 800; letter-spacing: -0.025em; margin: 34px 0 6px; color: var(--text); }
+  .auth-sub { font-size: 15px; color: var(--text-muted); margin: 0 0 24px; line-height: 1.45; }
+  .auth-tabs {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px;
+    background: var(--surface-2); border-radius: 12px; margin-bottom: 22px;
+  }
+  .auth-tabs button {
+    border: none; background: none; border-radius: 9px; padding: 10px 0; cursor: pointer;
+    font-family: inherit; font-size: 14px; font-weight: 600; color: var(--text-muted);
+  }
+  .auth-tabs button.is-on { background: var(--surface); color: var(--text); box-shadow: 0 1px 3px rgba(0,0,0,0.12); }
+  .auth-field { display: block; margin-bottom: 14px; }
+  .auth-field > span:first-child { display: block; font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 6px; }
+  .auth-field input {
+    width: 100%; height: 52px; box-sizing: border-box; padding: 0 14px;
+    font-family: inherit; font-size: 16px; color: var(--text);
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    outline: none; transition: border-color .15s, box-shadow .15s;
+  }
+  .auth-field input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-bg); }
+  .auth-pw { position: relative; display: block; }
+  .auth-pw input { padding-right: 68px; }
+  .auth-pw button {
+    position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+    border: none; background: none; cursor: pointer; padding: 8px 10px;
+    font-family: inherit; font-size: 13px; font-weight: 600; color: var(--accent-strong);
+  }
+  .auth-note { min-height: 18px; margin: 2px 0 10px; font-size: 13px; color: var(--danger); }
+  .auth-note.is-ok { color: var(--accent-strong); }
+  .auth-submit { height: 52px; border-radius: 12px; font-size: 16px; }
+  .auth-switch { text-align: center; font-size: 14px; color: var(--text-muted); margin: 20px 0 0; }
+  .auth-switch button {
+    border: none; background: none; padding: 0; cursor: pointer;
+    font-family: inherit; font-size: 14px; font-weight: 700; color: var(--accent-strong);
+  }
+  .auth-fine { text-align: center; font-size: 12px; color: var(--text-faint); margin: 28px 0 0; }
+
+  /* signed out, on the Friends tab */
+  .signin-card {
+    text-align: center; padding: 34px 22px 22px; margin-top: 8px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md);
+  }
+  .signin-card-icon {
+    width: 60px; height: 60px; margin: 0 auto 14px; border-radius: 50%;
+    background: var(--accent-bg); color: var(--accent); display: flex; align-items: center; justify-content: center;
+  }
+  .signin-card-icon svg { width: 30px; height: 30px; }
+  .signin-card-title { font-size: 18px; font-weight: 700; color: var(--text); }
+  .signin-card-text { font-size: 14px; color: var(--text-muted); margin: 6px 0 20px; line-height: 1.45; }
+
+  #friends-manage[hidden] { display: none; }
+
+  /* ---------- friends: requests, search, username ---------- */
+  #friend-search { margin: 4px 0 6px; }
+  #manage-results:not(:empty) {
+    border-bottom: 1px solid var(--border); margin-bottom: 4px; padding-bottom: 4px;
+  }
+  .manage-head {
+    font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--text-faint); margin: 16px 0 2px;
+  }
+  .manage-acts { display: flex; gap: 6px; flex-shrink: 0; align-items: center; }
+  .manage-act {
+    border: 1px solid var(--border); background: var(--surface); color: var(--text);
+    border-radius: 999px; padding: 6px 12px; cursor: pointer;
+    font-family: inherit; font-size: 13px; font-weight: 600;
+  }
+  .manage-act.is-primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  .manage-act:disabled, .manage-drop:disabled { opacity: 0.5; }
+  .manage-tag { font-size: 13px; font-weight: 600; color: var(--positive); padding: 6px 2px; }
+
+  .profile-handle { font-size: 14px; color: var(--text-muted); margin-top: -4px; }
+  .handle-field {
+    display: flex; align-items: center; gap: 2px;
+    background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: var(--radius-md); padding-left: 12px;
+  }
+  .handle-field span { color: var(--text-faint); font-weight: 600; }
+  .handle-field input { border: none; background: transparent; flex: 1; min-width: 0; }
