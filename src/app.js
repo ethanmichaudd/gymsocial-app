@@ -1274,7 +1274,13 @@ import {
           syncNow().then(function () {
             var st = syncStatus().status;
             if (st === "error" || st === "offline") {
-              showToast("Couldn't finish syncing, so you're still signed in. Try again online.");
+              // a stuck sync shouldn't trap you in an account
+              openConfirm({
+                title: "Sign out anyway?",
+                body: "Some changes on this phone haven't synced and will be lost.",
+                confirmLabel: "Sign out anyway",
+                onConfirm: function () { signOut(STORAGE_KEY); }
+              });
               return;
             }
             signOut(STORAGE_KEY);

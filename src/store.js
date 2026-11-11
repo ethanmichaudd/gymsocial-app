@@ -122,7 +122,9 @@ export async function signUp(username, password) {
  * it doesn't inherit your workouts. Everything synced is safe in the cloud.
  */
 export async function signOut(storageKey) {
-  await supabase.auth.signOut();
+  // a deleted or expired session can make this fail; sign out locally anyway
+  try { await supabase.auth.signOut(); }
+  catch (e) { await supabase.auth.signOut({ scope: "local" }).catch(() => {}); }
   try {
     localStorage.removeItem(storageKey);
     localStorage.removeItem(META_KEY);
@@ -255,6 +257,25 @@ export function newId() {
 function adoptIntoAccount(state) {
   const uid = sync.user.id;
   const oldMe = state.me.id;
+
+  // This phone's copy belongs to a DIFFERENT account (it signed in here
+  // before). That data is already safe in its own account, and can't be
+  // re-uploaded as yours, so start clean and let the pull fill in yours.
+  if (isUuid(oldMe) && oldMe !== uid) {
+    state.workouts = [];
+    state.exercises = [];
+    state.gyms = [];
+    state.foreignGyms = [];
+    state.foreignExercises = [];
+    state.follows = [];
+    state.connections = [];
+    state.friendRequests = { incoming: [], outgoing: [] };
+    state.users = [state.me];
+    Object.assign(state.me, { id: uid, name: "You", handle: "", avatar: null, isPrivate: false });
+    try { localStorage.removeItem(META_KEY); } catch (e) { /* nothing to clear */ }
+    return;
+  }
+
   if (oldMe !== uid) {
     const swap = (id) => (id === oldMe ? uid : id);
     state.me.id = uid;
