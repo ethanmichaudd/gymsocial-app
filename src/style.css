@@ -1292,3 +1292,29 @@
   .switch[aria-checked="true"] { background: var(--positive); }
   .switch[aria-checked="true"] span { transform: translateX(20px); }
   .switch:disabled { opacity: 0.45; cursor: default; }
+
+  /* Settings: backup and erase sit apart at the bottom */
+  .settings-data {
+    margin-top: 30px; padding-top: 20px;
+    border-top: 1px solid var(--border);
+  }
+  .settings-section {
+    font-size: 13px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--text-faint); margin: 0 0 14px;
+  }
+  .settings-row {
+    display: flex; align-items: center; gap: 12px; width: 100%;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-md); padding: 12px 14px;
+    font-family: inherit; text-align: left; cursor: pointer; color: var(--text);
+  }
+  .settings-row:active { border-color: var(--accent); }
+  .settings-row .chevron { color: var(--text-faint); }
+  .settings-row-icon {
+    width: 36px; height: 36px; border-radius: 10px; flex-shrink: 0;
+    background: var(--surface-2); color: var(--text-muted);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .settings-row-icon svg { width: 20px; height: 20px; }
+  #list-modal-body .setting-block:first-child .field-label { margin-top: 0; }
+

@@ -975,15 +975,6 @@ import {
         accountBlockHtml() +
         notifyBlockHtml() +
         '<div class="setting-block">' +
-          '<label class="field-label">Backup</label>' +
-          '<div class="action-row" style="margin-bottom:0;">' +
-            '<button class="btn btn-ghost" data-backup="export">Export data</button>' +
-            '<button class="btn btn-ghost" data-backup="import">Restore</button>' +
-          '</div>' +
-          '<p class="setting-help">Browser storage isn\'t permanent. Export a copy you can paste back in, or move to a new phone.</p>' +
-        '</div>' +
-
-        '<div class="setting-block">' +
           '<label class="field-label">Equipment</label>' +
           '<div class="equip-wrap">' +
             equipmentList(true).map(function (eq) {
@@ -1013,14 +1004,6 @@ import {
         '</div>' +
 
         '<div class="setting-block">' +
-          '<label class="field-label">Danger zone</label>' +
-          '<button class="btn btn-ghost btn-block" id="reset-demo-btn" ' +
-            'style="color:var(--danger);border-color:var(--danger);">Erase all my data</button>' +
-          '<p class="setting-help">Deletes every workout, gym and exercise in this browser. ' +
-            'Export a backup first.</p>' +
-        '</div>' +
-
-        '<div class="setting-block">' +
           '<label class="field-label">Streak counted by</label>' +
           '<div class="segmented">' +
             ["weekly", "daily", "custom"].map(function (m) {
@@ -1031,17 +1014,22 @@ import {
           params +
           '<p class="setting-help">' + modeHelp + '</p>' +
         '</div>' +
+
+        /* Anything that can overwrite or wipe your log lives down here, away
+           from the everyday settings, so it is never a stray tap away. */
+        '<div class="settings-data">' +
+          '<button class="settings-row" id="open-data">' +
+            '<span class="settings-row-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><ellipse cx="12" cy="6" rx="7" ry="2.8"/><path d="M5 6v6c0 1.5 3.1 2.8 7 2.8s7-1.3 7-2.8V6"/><path d="M5 12v6c0 1.5 3.1 2.8 7 2.8s7-1.3 7-2.8v-6"/></svg></span>' +
+            '<span class="person-body"><span class="person-name">Data</span>' +
+              '<span class="person-sub">Back up, restore or erase</span></span>' +
+            '<span class="chevron">&rsaquo;</span>' +
+          '</button>' +
+        '</div>' +
       '</div>';
 
-    wireEraseButton(el);
     wireAccount(el);
     wireNotify(el);
-    el.querySelectorAll("[data-backup]").forEach(function (btn) {
-      btn.addEventListener("click", function () {
-        if (btn.getAttribute("data-backup") === "export") openExportSheet();
-        else openImportSheet();
-      });
-    });
+    el.querySelector("#open-data").addEventListener("click", openDataSheet);
 
     var equipInput = el.querySelector("#set-equip");
     el.querySelector("[data-add-equip]").addEventListener("click", function () {
@@ -1423,6 +1411,7 @@ import {
           ", your gyms and your exercises. It cannot be undone -- export a backup first.",
         confirmLabel: "Erase everything",
         onConfirm: function () {
+          closeListSheet();
           state = seedState();
           selectedExerciseId = null;
           calendarMonth = null;
@@ -2102,6 +2091,34 @@ import {
   /* The artifact viewer blocks page-initiated downloads, so a backup is text
      you copy out and paste back in -- which also happens to be the format
      that can seed a real database later. */
+  /* Backup and erase, in a sheet of their own: everything that can
+     overwrite or wipe your log is behind one deliberate tap. */
+  function openDataSheet() {
+    var el = openListSheet("Data",
+        '<div class="setting-block">' +
+          '<label class="field-label">Backup</label>' +
+          '<div class="action-row" style="margin-bottom:0;">' +
+            '<button class="btn btn-ghost" data-backup="export">Export data</button>' +
+            '<button class="btn btn-ghost" data-backup="import">Restore</button>' +
+          '</div>' +
+          '<p class="setting-help">Browser storage isn\'t permanent. Export a copy you can paste back in, or move to a new phone.</p>' +
+        '</div>' +
+        '<div class="setting-block">' +
+          '<label class="field-label">Erase</label>' +
+          '<button class="btn btn-ghost btn-block" id="reset-demo-btn" ' +
+            'style="color:var(--danger);border-color:var(--danger);">Erase all my data</button>' +
+          '<p class="setting-help">Deletes every workout, gym and exercise' + (currentUser() ? ', here and in your account on every device' : ' on this phone') + '. ' +
+            'Export a backup first.</p>' +
+        '</div>');
+    wireEraseButton(el);
+    el.querySelectorAll("[data-backup]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        if (btn.getAttribute("data-backup") === "export") openExportSheet();
+        else openImportSheet();
+      });
+    });
+  }
+
   function openExportSheet() {
     var json = JSON.stringify(state, null, 2);
     var el = openListSheet("Export your data",
