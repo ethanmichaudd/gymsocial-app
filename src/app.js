@@ -3846,7 +3846,25 @@ import {
 
   /* Everything that is "you over time": who you are, the all-time numbers,
      your gyms and your whole history. Home stays about today. */
+  /* Your profile is your account: signed out, there is nothing to show
+     yet but the way in. */
+  var PERSON_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8.5" r="3.6"/><path d="M5 20a7 7 0 0 1 14 0"/></svg>';
+
   function renderProfile() {
+    var out = signedOut();
+    var gate = document.getElementById("profile-signin");
+    gate.hidden = !out;
+    document.getElementById("profile-body").hidden = out;
+    if (out) {
+      gate.innerHTML = '<div class="signin-card">' +
+        '<div class="signin-card-icon">' + PERSON_SVG + '</div>' +
+        '<div class="signin-card-title">Sign in to see your profile</div>' +
+        '<p class="signin-card-text">Pick a username, add a photo, and let your friends find you.</p>' +
+        '<button class="btn btn-primary btn-block" id="profile-sign-in" data-open-auth="signin">Sign in</button>' +
+        '<button class="btn btn-ghost btn-block" data-open-auth="signup" style="margin-top:8px;">Create account</button>' +
+      '</div>';
+      return;
+    }
     var me = state.me;
     var mine = myWorkouts();
     var streak = computeStreak(me.id);
