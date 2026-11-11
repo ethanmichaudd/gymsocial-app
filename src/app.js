@@ -1940,18 +1940,30 @@ import {
     manageSearch = "";
     manageResults = [];
     var el = openListSheet("Friends",
-      '<p class="setting-help" style="margin-top:0;">You\'re <strong>@' + esc(state.me.handle || "") +
-        '</strong>. Friends find you by that; change it in Profile.</p>' +
-      '<input type="search" id="friend-search" placeholder="Search by username" ' +
-        'autocomplete="off" autocapitalize="off" spellcheck="false">' +
+      '<div class="find-box">' +
+        '<svg class="find-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></svg>' +
+        '<input type="search" id="friend-search" placeholder="Search by username" ' +
+          'autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="search">' +
+        '<button type="button" class="find-clear" id="friend-clear" aria-label="Clear" hidden>' +
+          '<svg viewBox="0 0 24 24" stroke-width="2.4" stroke-linecap="round"><path d="M7 7l10 10M17 7L7 17"/></svg></button>' +
+      '</div>' +
+      '<p class="find-hint">You\'re <strong>@' + esc(state.me.handle || "") +
+        '</strong> \u00b7 friends find you by that</p>' +
       '<div id="manage-results"></div>' +
       '<div id="manage-lists"></div>');
     drawManage(el);
 
     var input = el.querySelector("#friend-search");
+    var clear = el.querySelector("#friend-clear");
     var timer = null;
     var asked = 0;
+    clear.addEventListener("click", function () {
+      input.value = "";
+      input.dispatchEvent(new Event("input"));
+      input.focus();
+    });
     input.addEventListener("input", function () {
+      clear.hidden = !input.value;
       manageSearch = input.value;
       clearTimeout(timer);
       if (manageSearch.trim().length < 2) { manageResults = []; drawManage(el); return; }
