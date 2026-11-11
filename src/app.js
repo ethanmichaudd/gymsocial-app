@@ -3695,6 +3695,44 @@ import {
   /* The selected day, under the calendar: did you train, and who else did.
      Every entry is a full-width row; tapping one opens that session. If you
      logged nothing that day, your row is the way to log it, already dated. */
+  /* A workout is already half-typed: offer to carry on with it, or start
+     fresh -- and only ask about discarding once they pick fresh. */
+  function openDraftChoice(dayName, startNew) {
+    var p = (draft.date || "").split("-");
+    var when = p.length === 3
+      ? calendarDate(new Date(+p[0], +p[1] - 1, +p[2]).toISOString()) : "";
+    var n = (draft.exercises || []).length;
+    var sets = (draft.exercises || []).reduce(function (sum, ex) {
+      return sum + (ex.sets || []).filter(function (st) {
+        return st.reps || st.seconds || st.weight || st.distance;   // filled in, not blank rows
+      }).length;
+    }, 0);
+    var el = openListSheet("Workout in progress",
+      '<div class="draft-card">' +
+        '<span class="draft-card-name">' + esc(draft.title || "Untitled workout") + '</span>' +
+        '<span class="person-sub">' + [when,
+          n + (n === 1 ? " exercise" : " exercises"),
+          sets ? sets + (sets === 1 ? " set" : " sets") : null]
+          .filter(Boolean).map(esc).join(" &middot; ") + '</span>' +
+      '</div>' +
+      '<button class="btn btn-primary btn-block" id="draft-continue">Keep editing it</button>' +
+      '<button class="btn btn-ghost btn-block" id="draft-new" style="margin-top:8px;">Start a new one for ' +
+        esc(dayName) + '</button>');
+    el.querySelector("#draft-continue").addEventListener("click", function () {
+      closeListSheet();
+      activateTab("log");
+    });
+    el.querySelector("#draft-new").addEventListener("click", function () {
+      closeListSheet();
+      openConfirm({
+        title: "Discard your unsaved workout?",
+        body: "\u201c" + (draft.title || "Untitled workout") + "\u201d will be deleted. This can\u2019t be undone.",
+        confirmLabel: "Discard",
+        onConfirm: startNew
+      });
+    });
+  }
+
   function renderHomeDay() {
     var el = document.getElementById("home-day");
     var key = selectedDayKey || localDayKey(new Date().toISOString());
@@ -3781,13 +3819,7 @@ import {
       // never throw away a workout someone is halfway through typing
       saveDraft();
       if (!draftHasContent(draft)) { start(); return; }
-      openConfirm({
-        title: "Discard your unsaved workout?",
-        body: "You have a workout in progress. Starting one for " +
-          (isToday ? "today" : calendarDate(iso)) + " clears it.",
-        confirmLabel: "Discard",
-        onConfirm: start
-      });
+      openDraftChoice(isToday ? "today" : calendarDate(iso), start);
     });
     var addBtn = el.querySelector("#day-add-friends");
     if (addBtn && !signedOut()) addBtn.addEventListener("click", function () { activateTab("friends"); });

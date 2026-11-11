@@ -1317,4 +1317,9 @@
   }
   .settings-row-icon svg { width: 20px; height: 20px; }
   #list-modal-body .setting-block:first-child .field-label { margin-top: 0; }
+  .draft-card {
+    display: block; padding: 14px; margin: 2px 0 14px;
+    background: var(--surface-2); border-radius: var(--radius-md);
+  }
+  .draft-card-name { display: block; font-weight: 700; font-size: 15px; color: var(--text); margin-bottom: 2px; }
 
