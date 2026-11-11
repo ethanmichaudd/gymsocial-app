@@ -2,7 +2,7 @@ import {
   loadState, saveState, cloudEnabled, currentUser, startSync, syncNow, syncStatus,
   signIn, signUp, signOut, newId, shrinkPhoto, photoSrc,
   refreshSocial, searchPeople, sendFriendRequest, acceptFriendRequest, declineFriendRequest,
-  cancelFriendRequest, removeFriend, setReaction, setUsername, USERNAME_RULE
+  cancelFriendRequest, removeFriend, setReaction, setUsername, USERNAME_RULE, usesUsernameLogin
 } from "./store.js";
 
 (function () {
@@ -1127,7 +1127,8 @@ import {
     if (user) {
       return '<div class="setting-block">' +
         '<label class="field-label">Account</label>' +
-        '<p class="account-line">Signed in as <strong>' + esc(user.email) + '</strong></p>' +
+        '<p class="account-line">Signed in as <strong>' +
+          esc(usesUsernameLogin(user) ? "@" + (state.me.handle || "") : user.email) + '</strong></p>' +
         '<p class="setting-help" id="sync-line" style="margin-top:4px;">' + esc(syncLine()) + '</p>' +
         '<div class="action-row" style="margin-bottom:0;">' +
           '<button class="btn btn-ghost" id="sync-now-btn">Sync now</button>' +
@@ -1205,10 +1206,14 @@ import {
 
   document.getElementById("auth-form").addEventListener("submit", function (e) {
     e.preventDefault();
-    var email = document.getElementById("auth-email").value.trim();
+    var email = document.getElementById("auth-email").value.trim().toLowerCase();
     var pw = document.getElementById("auth-password").value;
     var btn = document.getElementById("auth-submit");
-    if (!email || !pw) { authNote("Enter your email and a password."); return; }
+    if (!email || !pw) { authNote("Enter your username and a password."); return; }
+    if (authMode === "signup" && !USERNAME_RULE.test(email.replace(/^@/, ""))) {
+      authNote("Usernames are 3\u201320 lowercase letters, numbers, _ or .");
+      return;
+    }
     if (authMode === "signup" && pw.length < 6) { authNote("Use at least 6 characters for your password."); return; }
     btn.disabled = true;
     authNote("");
@@ -1229,7 +1234,7 @@ import {
           done();
           if (needsConfirm) {
             setAuthMode("signin");
-            authNote("Check your email for a confirmation link, then sign in here.", true);
+            authNote("Account made, but Supabase still wants email confirmation. Turn off \u201cConfirm email\u201d in its settings.");
           } else {
             closeAuth();
             showToast("Account created. Syncing your workouts.");

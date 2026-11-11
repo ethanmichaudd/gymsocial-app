@@ -75,20 +75,45 @@ export function currentUser() {
   return sync.user;
 }
 
-export async function signIn(email, password) {
-  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-  if (error) throw error;
+/* Accounts are a username + password. Supabase still wants an email under
+   the hood, so a username becomes a placeholder address on a domain nobody
+   receives mail for -- with "Confirm email" off, nothing is ever sent.
+   Anything typed with an @ in it is treated as a real email, so accounts
+   made that way still sign in. */
+const LOGIN_DOMAIN = "users.gymsocial.app";
+
+function loginEmail(id) {
+  const v = String(id || "").trim().toLowerCase().replace(/^@/, "");
+  return v.includes("@") ? v : v + "@" + LOGIN_DOMAIN;
+}
+
+/** True for accounts that sign in with a username rather than an email. */
+export function usesUsernameLogin(user) {
+  return Boolean(user && user.email && user.email.endsWith("@" + LOGIN_DOMAIN));
+}
+
+export async function signIn(id, password) {
+  const { data, error } = await supabase.auth.signInWithPassword({ email: loginEmail(id), password });
+  if (error) {
+    if (/invalid login/i.test(error.message)) throw new Error("Wrong username or password.");
+    throw error;
+  }
   return data.user;
 }
 
-/** Returns true when the account still needs its email confirmed. */
-export async function signUp(email, password) {
-  const { data, error } = await supabase.auth.signUp({
-    email,
-    password,
-    options: { emailRedirectTo: location.origin + import.meta.env.BASE_URL },
-  });
-  if (error) throw error;
+/** Returns true if the project still asks for email confirmation. */
+export async function signUp(username, password) {
+  const name = String(username || "").trim().toLowerCase().replace(/^@/, "");
+  if (!USERNAME_RULE.test(name)) throw new Error("Usernames are 3\u201320 lowercase letters, numbers, _ or .");
+  const { data, error } = await supabase.auth.signUp({ email: loginEmail(name), password });
+  if (error) {
+    // already an account with that login, or the profile trigger hit a
+    // username someone else already has
+    if (/already registered|already exists|database error/i.test(error.message)) {
+      throw new Error("@" + name + " is taken. Try another.");
+    }
+    throw error;
+  }
   return !data.session;
 }
 
@@ -859,8 +884,24 @@ export async function setUsername(raw) {
   if (!USERNAME_RULE.test(name)) {
     throw new Error("Use 3–20 lowercase letters, numbers, _ or .");
   }
+  // For username accounts the login moves with the handle, login first: if
+  // that name is taken the auth change fails before anything is touched.
+  const oldEmail = sync.user.email;
+  const movesLogin = usesUsernameLogin(sync.user);
+  if (movesLogin) {
+    const au = await supabase.auth.updateUser({ email: loginEmail(name) });
+    if (au.error) {
+      if (/already|registered|exists/i.test(au.error.message)) throw new Error("@" + name + " is taken. Try another.");
+      throw au.error;
+    }
+    sync.user.email = loginEmail(name);
+  }
   const { error } = await supabase.from("profiles").update({ username: name }).eq("id", sync.user.id);
   if (error) {
+    if (movesLogin) {             // put the login back so it still matches
+      await supabase.auth.updateUser({ email: oldEmail });
+      sync.user.email = oldEmail;
+    }
     if (error.code === "23505") throw new Error("@" + name + " is taken. Try another.");
     throw error;
   }
