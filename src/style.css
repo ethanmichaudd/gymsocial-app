@@ -1322,4 +1322,5 @@
     background: var(--surface-2); border-radius: var(--radius-md);
   }
   .draft-card-name { display: block; font-weight: 700; font-size: 15px; color: var(--text); margin-bottom: 2px; }
+  .log-cancel { flex-shrink: 0; }
 

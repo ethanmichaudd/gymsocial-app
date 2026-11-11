@@ -2370,7 +2370,10 @@ import {
   var CLOSE_SVG = '<svg viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round">' +
     '<path d="M6 6l12 12M18 6L6 18"/></svg>';
 
+  var tabBeforeLog = "home";   // where Cancel on the log screen goes back to
+
   function activateTab(name) {
+    if (name === "log" && currentTab !== "log" && currentTab !== "settings") tabBeforeLog = currentTab || "home";
     currentTab = name;
 
     // the button shows what pressing it will do next
@@ -3070,6 +3073,20 @@ import {
     wireLogEvents();
     saveDraft();
   }
+
+  /* Cancel leaves the log screen. With nothing typed it just goes back;
+     with a workout in progress it asks first, so a stray tap loses nothing. */
+  document.getElementById("log-cancel").addEventListener("click", function () {
+    saveDraft();
+    var back = function () { activateTab(tabBeforeLog || "home"); };
+    if (!draftHasContent(draft)) { resetDraft(); back(); return; }
+    openConfirm({
+      title: "Discard your unsaved workout?",
+      body: "\u201c" + (draft.title || "Untitled workout") + "\u201d will be deleted. This can\u2019t be undone.",
+      confirmLabel: "Discard",
+      onConfirm: function () { resetDraft(); back(); showToast("Workout discarded."); }
+    });
+  });
 
   function wireLogEvents() {
     document.getElementById("log-gym").onchange = function (e) { draft.gymId = e.target.value; };
