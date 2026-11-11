@@ -75,6 +75,11 @@
         <input type="number" inputmode="numeric" id="log-calories" placeholder="From your watch or tracker">
       </div>
 
+      <div class="field">
+        <label class="field-label">Photo (optional)</label>
+        <div class="photo-field" id="log-photo"></div>
+      </div>
+
       <div id="exercise-blocks"></div>
       <button class="add-exercise-btn" id="add-exercise-btn">+ Add Exercise</button>
 
@@ -110,6 +115,7 @@
       <div class="screen-head"><h1>Settings</h1></div>
       <div id="settings-body"></div>
       <input type="file" id="avatar-input" accept="image/*" hidden>
+      <input type="file" id="photo-input" accept="image/*" hidden>
     </section>
 
     <!-- PROFILE -->
@@ -318,6 +324,11 @@
     <div class="field">
       <label class="field-label" for="edit-calories">Calories burned</label>
       <input type="number" inputmode="numeric" id="edit-calories" placeholder="From your watch or tracker">
+    </div>
+
+    <div class="field">
+      <label class="field-label">Photo</label>
+      <div class="photo-field" id="edit-photo"></div>
     </div>
 
     <label class="field-label">Exercises</label>

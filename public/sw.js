@@ -1,5 +1,5 @@
 /* Cache the app shell so it opens with no connection. Bump CACHE on release. */
-const CACHE = "gymsocial-v40";
+const CACHE = "gymsocial-v41";
 
 self.addEventListener("install", (event) => {
   self.skipWaiting();
@@ -21,6 +21,8 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   const { request } = event;
   if (request.method !== "GET") return;
+  // Supabase (accounts, sync, photos) always goes straight to the network
+  if (new URL(request.url).origin !== location.origin) return;
 
   // Navigations: network first, fall back to the cached shell when offline.
   if (request.mode === "navigate") {

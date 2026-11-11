@@ -1,4 +1,7 @@
-import { loadState, saveState } from "./store.js";
+import {
+  loadState, saveState, cloudEnabled, currentUser, startSync, syncNow, syncStatus,
+  signIn, signUp, signOut, newId, shrinkPhoto, photoSrc
+} from "./store.js";
 
 (function () {
   "use strict";
@@ -9,7 +12,9 @@ import { loadState, saveState } from "./store.js";
 
   /* ----------------------------- starting state ----------------------------- */
 
-  function uid(prefix) { return prefix + "_" + Math.random().toString(36).slice(2, 9); }
+  /* Real uuids, so anything made here can go straight into the database.
+     (The prefix is kept for readability at the call sites only.) */
+  function uid(prefix) { return newId(); }
 
   /* Movement pattern per exercise -- drives the calendar colors. */
   /* How a set is measured. An exercise picks one; every screen that reads
@@ -942,6 +947,7 @@ import { loadState, saveState } from "./store.js";
 
     el.innerHTML =
       '<div>' +
+        accountBlockHtml() +
         '<div class="setting-block">' +
           '<label class="field-label">Backup</label>' +
           '<div class="action-row" style="margin-bottom:0;">' +
@@ -1002,6 +1008,7 @@ import { loadState, saveState } from "./store.js";
       '</div>';
 
     wireEraseButton(el);
+    wireAccount(el);
     el.querySelectorAll("[data-backup]").forEach(function (btn) {
       btn.addEventListener("click", function () {
         if (btn.getAttribute("data-backup") === "export") openExportSheet();
@@ -1075,6 +1082,155 @@ import { loadState, saveState } from "./store.js";
       });
     });
   }
+
+  /* ----------------------------- account ----------------------------- */
+
+  function syncLine() {
+    var st = syncStatus();
+    if (st.status === "syncing") return "Syncing\u2026";
+    if (st.status === "offline") return "Offline \u2014 changes will sync when you're back online.";
+    if (st.status === "error") return "Couldn't sync. Tap Sync now to try again.";
+    if (st.status === "synced" && st.lastSynced) {
+      var mins = Math.round((Date.now() - st.lastSynced) / 60000);
+      return "Synced " + (mins < 1 ? "just now" : mins + " min ago") + ".";
+    }
+    return "";
+  }
+
+  function accountBlockHtml() {
+    if (!cloudEnabled()) return "";
+    var user = currentUser();
+    if (user) {
+      return '<div class="setting-block">' +
+        '<label class="field-label">Account</label>' +
+        '<p class="account-line">Signed in as <strong>' + esc(user.email) + '</strong></p>' +
+        '<p class="setting-help" id="sync-line" style="margin-top:4px;">' + esc(syncLine()) + '</p>' +
+        '<div class="action-row" style="margin-bottom:0;">' +
+          '<button class="btn btn-ghost" id="sync-now-btn">Sync now</button>' +
+          '<button class="btn btn-ghost" id="sign-out-btn">Sign out</button>' +
+        '</div>' +
+      '</div>';
+    }
+    return '<div class="setting-block">' +
+      '<label class="field-label">Account</label>' +
+      '<div class="auth-form">' +
+        '<input type="email" id="auth-email" placeholder="Email" autocomplete="email" autocapitalize="off">' +
+        '<input type="password" id="auth-password" placeholder="Password (6+ characters)" autocomplete="current-password">' +
+      '</div>' +
+      '<div class="action-row" style="margin-bottom:0;">' +
+        '<button class="btn btn-primary" id="sign-in-btn">Sign in</button>' +
+        '<button class="btn btn-ghost" id="sign-up-btn">Create account</button>' +
+      '</div>' +
+      '<p class="setting-help" id="auth-note">Sign in to back up your workouts, use them on any phone, and add photos. ' +
+        'Everything already on this phone gets added to your account.</p>' +
+    '</div>';
+  }
+
+  function wireAccount(el) {
+    var note = el.querySelector("#auth-note");
+    function creds() {
+      var email = el.querySelector("#auth-email").value.trim();
+      var pw = el.querySelector("#auth-password").value;
+      if (!email || !pw) { note.textContent = "Enter your email and a password."; return null; }
+      return { email: email, pw: pw };
+    }
+    function busy(on) {
+      ["#sign-in-btn", "#sign-up-btn"].forEach(function (id) {
+        var b = el.querySelector(id); if (b) b.disabled = on;
+      });
+    }
+
+    var inBtn = el.querySelector("#sign-in-btn");
+    if (inBtn) inBtn.addEventListener("click", function () {
+      var c = creds(); if (!c) return;
+      busy(true);
+      signIn(c.email, c.pw)
+        .then(function () { showToast("Signed in. Syncing your workouts."); })
+        .catch(function (err) { note.textContent = err.message || "Couldn't sign in."; busy(false); });
+    });
+
+    var upBtn = el.querySelector("#sign-up-btn");
+    if (upBtn) upBtn.addEventListener("click", function () {
+      var c = creds(); if (!c) return;
+      busy(true);
+      signUp(c.email, c.pw)
+        .then(function (needsConfirm) {
+          busy(false);
+          if (needsConfirm) note.textContent = "Check your email for a confirmation link, then come back here and sign in.";
+          else showToast("Account created. Syncing your workouts.");
+        })
+        .catch(function (err) { note.textContent = err.message || "Couldn't create the account."; busy(false); });
+    });
+
+    var nowBtn = el.querySelector("#sync-now-btn");
+    if (nowBtn) nowBtn.addEventListener("click", function () { syncNow(); });
+
+    var outBtn = el.querySelector("#sign-out-btn");
+    if (outBtn) outBtn.addEventListener("click", function () {
+      openConfirm({
+        title: "Sign out?",
+        body: "Your synced workouts stay in your account. This phone's copy is cleared \u2014 sign back in to get it back.",
+        confirmLabel: "Sign out",
+        onConfirm: function () {
+          syncNow().then(function () {
+            var st = syncStatus().status;
+            if (st === "error" || st === "offline") {
+              showToast("Couldn't finish syncing, so you're still signed in. Try again online.");
+              return;
+            }
+            signOut(STORAGE_KEY);
+          });
+        }
+      });
+    });
+  }
+
+  /* ----------------------------- workout photo ----------------------------- */
+
+  /* One photo per workout. Picked here, shrunk, and held on the workout as
+     photoData until the sync uploads it. Needs an account: a phone's local
+     storage would fill up after a handful of photos. */
+  var photoTarget = null;
+
+  function wirePhotoField(elId, get, set) {
+    var el = document.getElementById(elId);
+    if (!el) return;
+    var field = el.closest(".field");
+    if (!cloudEnabled()) { if (field) field.style.display = "none"; return; }
+
+    if (!currentUser()) {
+      el.innerHTML = '<button class="photo-add" type="button">Sign in to add a photo</button>';
+      el.querySelector("button").onclick = function () {
+        if (editingId) closeEditWorkout();
+        openSettings();
+      };
+      return;
+    }
+
+    var src = get();
+    el.innerHTML = src
+      ? '<div class="photo-thumb"><img src="' + esc(src) + '" alt="Workout photo">' +
+          '<button class="photo-x" type="button" aria-label="Remove photo">&times;</button></div>' +
+          '<button class="photo-add is-small" type="button">Replace</button>'
+      : '<button class="photo-add" type="button">+ Add photo</button>';
+
+    el.querySelector(".photo-add").onclick = function () {
+      photoTarget = { elId: elId, get: get, set: set };
+      document.getElementById("photo-input").click();
+    };
+    var x = el.querySelector(".photo-x");
+    if (x) x.onclick = function () { set(null); wirePhotoField(elId, get, set); };
+  }
+
+  document.getElementById("photo-input").addEventListener("change", function (e) {
+    var file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!file || !photoTarget) return;
+    var t = photoTarget;
+    shrinkPhoto(file)
+      .then(function (data) { t.set(data); wirePhotoField(t.elId, t.get, t.set); })
+      .catch(function (err) { showToast(err.message); });
+  });
 
   function wireEraseButton(el) {
     var btn = el.querySelector("#reset-demo-btn");
@@ -1481,6 +1637,10 @@ import { loadState, saveState } from "./store.js";
           '</span>' +
           '<span class="chevron">&rsaquo;</span>' +
         '</button>' +
+        (photoSrc(row.wk)
+          ? '<button class="card-photo" data-friend-wk="' + row.wk.id + '">' +
+              '<img src="' + esc(photoSrc(row.wk)) + '" alt="" loading="lazy"></button>'
+          : '') +
         reactionBarHtml(row.wk) +
       '</div>';
     });
@@ -1627,6 +1787,10 @@ import { loadState, saveState } from "./store.js";
             '</div>'
           : '') +
       '</div>';
+
+    if (photoSrc(wk)) {
+      html += '<img class="detail-photo" src="' + esc(photoSrc(wk)) + '" alt="Workout photo">';
+    }
 
     html += '<div class="stat-grid" style="margin:16px 0 20px;' +
       (tiles.length === 4 ? "grid-template-columns:repeat(2,1fr);" : "") + '">' +
@@ -1998,6 +2162,7 @@ import { loadState, saveState } from "./store.js";
         return {
           exerciseId: blk.exerciseId,
           metric: metricOf(blk),
+          equipment: blk.equipment || null,
           note: blk.note || "",
           superset: blk.superset || null,
           sets: blk.sets.map(function (s) {
@@ -2009,6 +2174,9 @@ import { loadState, saveState } from "./store.js";
         };
       })
     };
+    editDraft.photo = photoSrc(wk);
+    editDraft.photoNew = null;
+    editDraft.photoRemoved = false;
     document.getElementById("edit-title").value = wk.title || "";
     document.getElementById("edit-calories").value = wk.calories == null ? "" : wk.calories;
     renderEditModal();
@@ -2027,6 +2195,12 @@ import { loadState, saveState } from "./store.js";
     document.getElementById("edit-end").value = editDraft.endTime || "";
     updateDurationReadout("edit", editDraft);
     renderExerciseBlocks(document.getElementById("edit-exercise-blocks"), editDraft, renderEditModal, editingId);
+    wirePhotoField("edit-photo",
+      function () { return editDraft.photoNew || (editDraft.photoRemoved ? null : editDraft.photo); },
+      function (d) {
+        editDraft.photoNew = d || null;
+        if (!d) editDraft.photoRemoved = true;
+      });
   }
 
   document.getElementById("edit-gym").addEventListener("change", function (e) { editDraft.gymId = e.target.value; });
@@ -2062,6 +2236,13 @@ import { loadState, saveState } from "./store.js";
     wk.exercises = cleanExercises;
     wk.performedAt = isoFromDateTime(editDraft.date, editDraft.startTime);
     wk.endedAt = endIsoFrom(editDraft.date, editDraft.startTime, editDraft.endTime);
+    if (editDraft.photoNew) {
+      wk.photoData = editDraft.photoNew;
+    } else if (editDraft.photoRemoved) {
+      delete wk.photoData;
+      wk.photoPath = null;
+      wk.photoUrl = null;
+    }
     persist();
     closeEditWorkout();
     renderHome();
@@ -2142,6 +2323,7 @@ import { loadState, saveState } from "./store.js";
       date: saved.date || dateInputValue(new Date().toISOString()),
       startTime: saved.startTime || timeInputValue(new Date().toISOString()),
       endTime: saved.endTime || "",
+      photoData: saved.photoData || null,
       exercises: saved.exercises
     };
     return true;
@@ -2598,6 +2780,9 @@ import { loadState, saveState } from "./store.js";
     document.getElementById("log-end").value = draft.endTime || "";
     updateDurationReadout("log", draft);
     renderExerciseBlocks(document.getElementById("exercise-blocks"), draft, renderLog, null);
+    wirePhotoField("log-photo",
+      function () { return draft.photoData || null; },
+      function (d) { draft.photoData = d; saveDraft(); });
     wireLogEvents();
   }
 
@@ -2648,6 +2833,7 @@ import { loadState, saveState } from "./store.js";
         calories: cals != null && !isNaN(cals) ? cals : null,
         exercises: cleanExercises
       };
+      if (draft.photoData) workout.photoData = draft.photoData;
       state.workouts.push(workout);
       persist();
       titleInput.value = "";
@@ -3423,6 +3609,9 @@ import { loadState, saveState } from "./store.js";
             '</span>' +
             '<span class="exercise-chips">' + exerciseChipsHtml(wk) + '</span>' +
           '</span>' +
+          (photoSrc(wk)
+            ? '<img class="log-thumb" src="' + esc(photoSrc(wk)) + '" alt="" loading="lazy">'
+            : '') +
         '</button>';
     });
     el.innerHTML = html;
@@ -3605,4 +3794,21 @@ import { loadState, saveState } from "./store.js";
   }
   persist();
   renderHome();
+
+  /* Accounts + sync. After a pull brings in changes from another phone,
+     redraw whatever is on screen -- except mid-edit, where it would wipe
+     what you're typing. */
+  startSync({
+    getState: function () { return state; },
+    onChange: function () {
+      applyTheme();
+      if (editingId || currentTab === "log") return;
+      activateTab(currentTab);
+    },
+    onStatus: function () {
+      var line = document.getElementById("sync-line");
+      if (line) line.textContent = syncLine();
+      else if (currentTab === "settings") renderSettings();
+    }
+  });
 })();

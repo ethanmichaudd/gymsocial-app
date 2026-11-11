@@ -17,6 +17,8 @@ create table if not exists public.profiles (
   streak_mode text not null default 'weekly' check (streak_mode in ('weekly','daily','custom')),
   custom_count int not null default 4,
   custom_days int not null default 10,
+  avatar text,                          -- small square JPEG as a data URL
+  settings jsonb not null default '{}', -- equipment, theme, and other app prefs
   created_at timestamptz not null default now()
 );
 
@@ -24,11 +26,13 @@ create table if not exists public.profiles (
 create table if not exists public.gyms (
   id uuid primary key default gen_random_uuid(),
   name text not null,
-  city text,
+  street text not null default '',
+  city text not null default '',
+  state text not null default '',
   offerings text[] default '{}',
   created_by uuid references public.profiles(id),
   created_at timestamptz not null default now(),
-  unique (name, city)
+  unique (name, street, city, state)   -- two branches of one chain stay separate
 );
 
 -- ---------- exercise catalogue ("inventory") ----------
@@ -53,6 +57,7 @@ create table if not exists public.workouts (
   performed_at timestamptz not null,   -- start of the session
   ended_at timestamptz,                -- optional; duration = ended_at - performed_at
   calories int,
+  photo_path text,                     -- object in the workout-photos bucket
   created_at timestamptz not null default now()
 );
 create index if not exists workouts_user_time_idx on public.workouts (user_id, performed_at desc);
@@ -63,6 +68,7 @@ create table if not exists public.workout_exercises (
   exercise_id uuid not null references public.exercises(id),
   order_index int not null default 0,
   metric text not null default 'reps' check (metric in ('reps','time','distance')),
+  equipment text,       -- Barbell, Dumbbell, ... or one you added
   note text,
   superset_group text   -- same value = performed together (A1/A2)
 );
@@ -166,9 +172,10 @@ create policy "add gyms" on public.gyms
 create policy "edit gyms you added" on public.gyms
   for update using (auth.uid() = created_by);
 
--- exercises: built-ins plus your own
+-- exercises: anyone signed in can read names, so a friend's session shows
+-- "Back Squat" rather than a blank; only the owner can change one
 create policy "exercises readable" on public.exercises
-  for select using (owner_id is null or owner_id = auth.uid());
+  for select using (auth.role() = 'authenticated');
 create policy "add own exercises" on public.exercises
   for insert with check (owner_id = auth.uid());
 create policy "edit own exercises" on public.exercises
@@ -269,3 +276,48 @@ insert into public.exercises (owner_id, name, category, metric) values
   (null, 'Treadmill Run', 'cardio', 'distance'),
   (null, 'Stationary Bike', 'cardio', 'distance')
 on conflict do nothing;
+
+-- =========================================================================
+-- New accounts get a profile row automatically
+-- =========================================================================
+create or replace function public.handle_new_user()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  insert into public.profiles (id, username)
+  values (new.id, split_part(new.email, '@', 1) || '_' || substr(new.id::text, 1, 4))
+  on conflict (id) do nothing;
+  return new;
+end;
+$$;
+
+drop trigger if exists on_auth_user_created on auth.users;
+create trigger on_auth_user_created
+  after insert on auth.users
+  for each row execute function public.handle_new_user();
+
+-- =========================================================================
+-- Workout photos (Supabase Storage)
+-- Files live at <user id>/<workout id>-<timestamp>.jpg. The bucket is
+-- private: the same privacy rule as workouts decides who can see a photo.
+-- =========================================================================
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values ('workout-photos', 'workout-photos', false, 5242880, array['image/jpeg','image/png','image/webp'])
+on conflict (id) do nothing;
+
+create policy "see photos you're allowed to" on storage.objects
+  for select using (
+    bucket_id = 'workout-photos'
+    and public.can_view(((storage.foldername(name))[1])::uuid)
+  );
+create policy "upload to your own folder" on storage.objects
+  for insert with check (
+    bucket_id = 'workout-photos' and (storage.foldername(name))[1] = auth.uid()::text
+  );
+create policy "replace your own photos" on storage.objects
+  for update using (
+    bucket_id = 'workout-photos' and (storage.foldername(name))[1] = auth.uid()::text
+  );
+create policy "delete your own photos" on storage.objects
+  for delete using (
+    bucket_id = 'workout-photos' and (storage.foldername(name))[1] = auth.uid()::text
+  );
