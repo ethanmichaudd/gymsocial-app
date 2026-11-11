@@ -45,23 +45,45 @@ import { loadState, saveState } from "./store.js";
     }).join(" ");
   }
 
+  /* The same number means different things on different equipment. The mode
+     decides what the weight column is called and how a set reads back. */
+  var WEIGHT_MODES = {
+    total:   { label: "Weight",       suffix: "" },
+    perSide: { label: "Per side",     suffix: "/side" },
+    perHand: { label: "Per hand",     suffix: " each" },
+    added:   { label: "Weight added", suffix: " added" }
+  };
+
+  var DEFAULT_WEIGHT_MODE = {
+    "Bodyweight": "added",
+    "Dumbbell": "perHand",
+    "Barbell": "total",
+    "Cable": "total",
+    "Machine": "total"
+  };
+
+  function weightMode(equipment) {
+    if (!equipment) return "total";
+    var set = (state.settings && state.settings.equipmentModes) || {};
+    return WEIGHT_MODES[set[equipment]] ? set[equipment]
+      : (DEFAULT_WEIGHT_MODE[equipment] || "total");
+  }
+
+  function weightLabel(blk) {
+    return WEIGHT_MODES[weightMode(blk && blk.equipment)].label;
+  }
+
   function isCustomEquipment(name) {
     return BUILTIN_EQUIPMENT.indexOf(name) === -1;
   }
 
-  /* Reps are loaded with something. A plank or a treadmill run is not, so the
-     rail would only be one more thing to scroll past. */
-  function usesEquipment(metric) { return metric === "reps"; }
+  /* Reps and holds are loaded with something -- a weighted plank is the whole
+     reason Time needs it too. A run is not, so Distance still has no rail. */
+  function usesEquipment(metric) { return metric !== "distance"; }
 
-  /* The one piece of equipment that changes the form: there is no weight to
-     type in, so the column comes out rather than sitting there empty. */
-  function isBodyweight(blk) {
-    return String(blk && blk.equipment || "").toLowerCase() === "bodyweight";
-  }
-
-  function dropsWeight(blk, metric) {
-    return isBodyweight(blk) && metric !== "distance";
-  }
+  /* Nothing drops the weight column any more: on bodyweight it just becomes
+     "Weight added" and stays empty unless you hung a plate off yourself. */
+  function dropsWeight() { return false; }
 
   /* Exercises that are obviously not rep-and-weight start in the right mode. */
   var DEFAULT_METRIC = {
@@ -183,7 +205,7 @@ import { loadState, saveState } from "./store.js";
       workouts: [],
       settings: {
         weeklyGoal: 3, streakMode: "weekly", customCount: 4, customDays: 10,
-        customEquipment: [], hiddenEquipment: [], theme: "light",
+        customEquipment: [], hiddenEquipment: [], equipmentModes: {}, theme: "light",
         schemaVersion: SCHEMA_VERSION
       }
     };
@@ -198,7 +220,9 @@ import { loadState, saveState } from "./store.js";
 
   function load() {
     var saved = loadState(STORAGE_KEY);
-    return saved ? migrate(saved) : seedState();
+    var s = saved ? migrate(saved) : seedState();
+    refreshDemoDates(s);
+    return s;
   }
 
   /* Fills in fields added after a version was saved, so an upgrade never
@@ -211,6 +235,7 @@ import { loadState, saveState } from "./store.js";
     if (s.settings.customDays == null) s.settings.customDays = 10;
     if (!s.settings.customEquipment) s.settings.customEquipment = [];
     if (!s.settings.hiddenEquipment) s.settings.hiddenEquipment = [];
+    if (!s.settings.equipmentModes) s.settings.equipmentModes = {};
     if (!s.settings.theme) s.settings.theme = "light";
     (s.gyms || []).forEach(function (g) {
       if (g.street == null) g.street = "";
@@ -376,6 +401,25 @@ import { loadState, saveState } from "./store.js";
     });
   }
 
+  /* The stand-ins are scenery, not history. Their sessions are re-dated to
+     today and yesterday on every load, so the Friends page never looks broken
+     just because a few days passed. Real friends are never touched. */
+  function refreshDemoDates(s) {
+    // declared in here on purpose: load() runs before a var at this point in
+    // the file would have been assigned, and reading it would throw
+    var daysBack = { demo_wk_1: 0, demo_wk_2: 1 };
+    (s.workouts || []).forEach(function (w) {
+      if (!(w.id in daysBack)) return;
+      var was = new Date(w.performedAt);
+      var want = new Date();
+      want.setDate(want.getDate() - daysBack[w.id]);
+      want.setHours(was.getHours(), was.getMinutes(), 0, 0);
+      var ran = w.endedAt ? new Date(w.endedAt) - was : 0;
+      w.performedAt = want.toISOString();
+      if (w.endedAt) w.endedAt = new Date(want.getTime() + ran).toISOString();
+    });
+  }
+
   function addDemoFriend2(s) {
     if ((s.users || []).some(function (u) { return u.id === DEMO_FRIEND_2_ID; })) return;
 
@@ -527,9 +571,11 @@ import { loadState, saveState } from "./store.js";
   }
 
   /* "3x8 @ 135lb", "3x45s", "2.0 mi in 18:30" -- collapses identical sets. */
-  function summarizeSets(sets, metric) {
+  function summarizeSets(sets, metric, equipment) {
     metric = metric || "reps";
     var cfg = METRICS[metric], unitKey = cfg.unitKey;
+    var wSuffix = metric === "distance" ? ""
+      : WEIGHT_MODES[weightMode(equipment)].suffix;
     var parts = [], run = null;
     sets.forEach(function (s) {
       var sig = [s.reps, s.seconds, s.weight, s.distance, s[unitKey]].join("|");
@@ -546,10 +592,10 @@ import { loadState, saveState } from "./store.js";
       }
       if (metric === "time") {
         var hold = s.seconds != null ? formatDuration(s.seconds) : "—";
-        return mult + hold + (s.weight != null ? " @ " + s.weight + unit : "");
+        return mult + hold + (s.weight != null ? " @ " + s.weight + unit + wSuffix : "");
       }
       var reps = s.reps == null ? "?" : s.reps;
-      return mult + reps + (s.weight != null ? " @ " + s.weight + unit : "");
+      return mult + reps + (s.weight != null ? " @ " + s.weight + unit + wSuffix : "");
     }).join(", ");
   }
 
@@ -861,7 +907,7 @@ import { loadState, saveState } from "./store.js";
         try { data = canvas.toDataURL("image/jpeg", 0.82); }
         catch (e) { showToast("Couldn't read that image."); return; }
         updateMe("avatar", data);
-        renderSettings();
+        renderProfile();
         renderHome();
         showToast("Photo updated.");
       };
@@ -870,18 +916,12 @@ import { loadState, saveState } from "./store.js";
     reader.readAsDataURL(file);
   }
 
-  var settingsTab = "profile";
-
   function renderSettings() {
     var el = document.getElementById("settings-body");
     var st = state.settings;
     var mode = st.streakMode;
 
-    document.querySelectorAll("[data-settings-tab]").forEach(function (b) {
-      b.classList.toggle("selected", b.getAttribute("data-settings-tab") === settingsTab);
-    });
 
-    if (settingsTab === "profile") { renderProfileSettings(el); return; }
 
     var params = "";
     if (mode === "weekly") {
@@ -1036,75 +1076,6 @@ import { loadState, saveState } from "./store.js";
     });
   }
 
-  /* Who you are, and the handful of numbers that describe your training as
-     a whole rather than this week. */
-  function renderProfileSettings(el) {
-    var me = state.me;
-    var mine = myWorkouts();
-    var streak = computeStreak(me.id);
-    var first = mine.slice().sort(function (a, b) {
-      return new Date(a.performedAt) - new Date(b.performedAt);
-    })[0];
-
-    var tiles = [
-      { value: mine.length, label: mine.length === 1 ? "Workout" : "Workouts" },
-      { value: gymsOf(me.id).length, label: "Gyms" },
-      { value: streak.best, label: "Best streak" },
-      { value: first ? shortDate(first.performedAt) : "--", label: "First logged" }
-    ];
-
-    el.innerHTML =
-      '<div class="profile-card">' +
-        avatarHtml(me, "is-big") +
-        '<div class="profile-name">' + esc(me.name) + '</div>' +
-        '<div class="profile-actions">' +
-          '<button class="btn btn-ghost" id="pick-photo">' +
-            (me.avatar ? "Change photo" : "Add photo") + '</button>' +
-          (me.avatar ? '<button class="btn btn-ghost" id="drop-photo">Remove</button>' : '') +
-        '</div>' +
-      '</div>' +
-
-      '<div class="setting-block">' +
-        '<label class="field-label" for="set-name">Display name</label>' +
-        '<input type="text" id="set-name" value="' + esc(me.name) + '" placeholder="Your name">' +
-        '<p class="setting-help">Shown on your sessions, and to friends once accounts are in.</p>' +
-      '</div>' +
-
-      '<div class="setting-block">' +
-        '<label class="field-label">All time</label>' +
-        '<div class="stat-grid" style="grid-template-columns:repeat(2,1fr);margin-bottom:0;">' +
-          tiles.map(function (t) {
-            return '<div class="stat-tile"><span class="num">' + esc(String(t.value)) +
-              '</span><span class="label">' + esc(t.label) + '</span></div>';
-          }).join("") +
-        '</div>' +
-      '</div>';
-
-    var fileInput = document.getElementById("avatar-input");
-    el.querySelector("#pick-photo").addEventListener("click", function () { fileInput.click(); });
-    var drop = el.querySelector("#drop-photo");
-    if (drop) {
-      drop.addEventListener("click", function () {
-        updateMe("avatar", null);
-        renderSettings();
-        renderHome();
-      });
-    }
-
-    /* Fires on blur, so re-rendering here would tear the input out
-       mid-event -- only the greeting depends on the name. */
-    el.querySelector("#set-name").addEventListener("change", function (e) {
-      var v = titleCase(e.target.value);
-      if (!v) { e.target.value = state.me.name; return; }
-      updateMe("name", v);
-      state.workouts.forEach(function (w) { if (w.userId === state.me.id) w.userName = v; });
-      persist();
-      e.target.value = v;
-      el.querySelector(".profile-name").textContent = v;
-      document.getElementById("home-greeting").textContent = v.split(" ")[0] + "'s Training";
-    });
-  }
-
   function wireEraseButton(el) {
     var btn = el.querySelector("#reset-demo-btn");
     if (!btn) return;
@@ -1134,16 +1105,10 @@ import { loadState, saveState } from "./store.js";
     e.target.value = "";          // so picking the same file twice still fires
   });
 
-  document.querySelectorAll("[data-settings-tab]").forEach(function (btn) {
-    btn.addEventListener("click", function () {
-      settingsTab = btn.getAttribute("data-settings-tab");
-      renderSettings();
-    });
-  });
-
   /* ----------------------------- calendar ----------------------------- */
 
   var calendarMonth = null; // first day of the displayed month
+  var selectedDayKey = null; // the day shown under the calendar; null = today
 
   function renderCalendar(userId, isMe) {
     var today = new Date();
@@ -1179,9 +1144,9 @@ import { loadState, saveState } from "./store.js";
       var cls = ["cal-day"];
       if (dayWorkouts.length) cls.push("trained");
       if (isToday) cls.push("today");
-      // Your own calendar is interactive: tap a session to edit it, tap an
-      // empty past day to log one on that date.
-      var tappable = isMe && (dayWorkouts.length > 0 || !isFuture);
+      if (key === (selectedDayKey || todayKey)) cls.push("selected");
+      // Any day up to today can be picked; the panel below shows it.
+      var tappable = isMe && !isFuture;
       if (tappable) cls.push("tappable");
 
       var tag = tappable ? "button" : "div";
@@ -1203,7 +1168,7 @@ import { loadState, saveState } from "./store.js";
     document.getElementById("cal-grid").innerHTML = html;
 
     document.getElementById("cal-hint").textContent = isMe
-      ? "Tap a day to see that session, or an empty day to log one on that date."
+      ? "Tap a day to see who trained."
       : "";
 
     // Don't browse past the current month -- there's nothing to see there.
@@ -1212,45 +1177,20 @@ import { loadState, saveState } from "./store.js";
 
     document.querySelectorAll("[data-cal-day]").forEach(function (cell) {
       cell.addEventListener("click", function () {
-        onCalendarDayTap(cell.getAttribute("data-cal-day"), byDay);
+        onCalendarDayTap(cell.getAttribute("data-cal-day"));
       });
     });
   }
 
-  function onCalendarDayTap(key, byDay) {
-    var dayWorkouts = byDay[key] || [];
-    if (dayWorkouts.length === 1) {
-      openWorkoutDetail(dayWorkouts[0].id);
-      return;
-    }
-    if (dayWorkouts.length > 1) {
-      var body = dayWorkouts.map(function (wk) {
-        var gymObj = wk.gymId ? findGym(wk.gymId) : null;
-        return '<button class="person-row" data-day-workout="' + wk.id + '">' +
-          '<span class="day-time">' + esc(formatTime(wk.performedAt)) + '</span>' +
-          '<span class="person-body"><span class="person-name">' + esc(wk.title || "Workout") + '</span>' +
-          '<span class="person-sub">' +
-            [gymObj ? esc(gymLabel(gymObj)) : null].concat(sessionFacts(wk).map(esc))
-              .filter(Boolean).join(' &middot; ') + '</span></span>' +
-          '<span class="chevron">&rsaquo;</span></button>';
-      }).join("");
-      var parts = key.split("-");
-      var el = openListSheet(calendarDate(new Date(Number(parts[0]), Number(parts[1]), Number(parts[2])).toISOString()), body);
-      el.querySelectorAll("[data-day-workout]").forEach(function (row) {
-        row.addEventListener("click", function () {
-          closeListSheet();
-          openWorkoutDetail(row.getAttribute("data-day-workout"));
-        });
-      });
-      return;
-    }
-    // Empty day -- start a log entry already dated to it.
+  function dateFromDayKey(key) {
     var p = key.split("-");
-    var d = new Date(Number(p[0]), Number(p[1]), Number(p[2]));
-    resetDraft();
-    draft.date = dateInputValue(d.toISOString());
-    activateTab("log");
-    showToast("Logging for " + calendarDate(d.toISOString()) + ".");
+    return new Date(Number(p[0]), Number(p[1]), Number(p[2]));
+  }
+
+  /* Tapping a day selects it; the panel under the calendar follows. */
+  function onCalendarDayTap(key) {
+    selectedDayKey = key;
+    renderHome();
   }
 
   document.getElementById("cal-prev").addEventListener("click", function () {
@@ -1706,7 +1646,8 @@ import { loadState, saveState } from "./store.js";
             esc(exObj ? exObj.name : "Exercise") + '</span>' +
           (blk.equipment ? '<span class="detail-ex-eq">' + esc(blk.equipment) + '</span>' : '') +
         '</div>' +
-        '<div class="detail-ex-sets num">' + esc(summarizeSets(blk.sets, metricOf(blk))) + '</div>' +
+        '<div class="detail-ex-sets num">' +
+          esc(summarizeSets(blk.sets, metricOf(blk), blk.equipment)) + '</div>' +
         (blk.note ? '<div class="detail-ex-note">' + esc(blk.note) + '</div>' : '') +
       '</div>';
     }).join("");
@@ -1996,7 +1937,7 @@ import { loadState, saveState } from "./store.js";
 
   /* ----------------------------- tabs ----------------------------- */
 
-  var screens = ["home", "log", "friends", "progress", "gyms", "settings"];
+  var screens = ["home", "log", "friends", "progress", "profile", "settings"];
   var currentTab = "home";
 
   var MENU_SVG = '<svg viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round">' +
@@ -2023,9 +1964,10 @@ import { loadState, saveState } from "./store.js";
     if (name === "home") renderHome();
     if (name === "log") renderLog();
     if (name === "friends") renderFriends();
+    if (name === "profile") renderProfile();
     if (name === "settings") renderSettings();
     if (name === "progress") renderProgress();
-    if (name === "gyms") renderGyms();
+
   }
 
   document.querySelectorAll("[data-tab]").forEach(function (btn) {
@@ -2146,10 +2088,11 @@ import { loadState, saveState } from "./store.js";
 
   /* ----------------------------- log ----------------------------- */
 
+  var DRAFT_KEY = "gymsocial_draft_v1";
   var draft = { gymId: "", exercises: [] };
 
-  function resetDraft() {
-    draft = {
+  function freshDraft() {
+    return {
       gymId: state.gyms[0] ? state.gyms[0].id : "",
       date: dateInputValue(new Date().toISOString()),
       startTime: timeInputValue(new Date().toISOString()),
@@ -2157,7 +2100,68 @@ import { loadState, saveState } from "./store.js";
       exercises: []
     };
   }
-  resetDraft();
+
+  /* An end time you typed wins. Left blank, the session ended when you hit
+     Save -- but only if that is actually after the start, so a session saved
+     in the same minute it began records no end instead of rolling a day. */
+  function defaultEndIso(d) {
+    if (d.endTime) return endIsoFrom(d.date, d.startTime, d.endTime);
+    var now = new Date();
+    var startedAt = new Date(isoFromDateTime(d.date, d.startTime));
+    var end = dateInputValue(now.toISOString()) === d.date
+      ? now
+      : new Date(endIsoFrom(d.date, d.startTime, timeInputValue(now.toISOString())));
+    return end > startedAt ? end.toISOString() : null;
+  }
+
+  function resetDraft() {
+    draft = freshDraft();
+    try { localStorage.removeItem(DRAFT_KEY); } catch (e) { /* nothing to clear */ }
+  }
+
+  /* A half-logged session used to live only in memory, so swiping the app
+     away lost it. It is written out on every change now and picked back up
+     on the next open. */
+  function saveDraft() {
+    try {
+      if (!draft.exercises || !draft.exercises.length) localStorage.removeItem(DRAFT_KEY);
+      else localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+    } catch (e) { /* storage full or blocked -- the session still works */ }
+  }
+
+  function restoreDraft() {
+    var raw;
+    try { raw = localStorage.getItem(DRAFT_KEY); } catch (e) { return false; }
+    if (!raw) return false;
+    var saved;
+    try { saved = JSON.parse(raw); } catch (e) { return false; }
+    if (!saved || !Array.isArray(saved.exercises)) return false;
+    if (!saved.exercises.length) return false;   // nothing worth restoring
+    draft = {
+      gymId: saved.gymId || "",
+      date: saved.date || dateInputValue(new Date().toISOString()),
+      startTime: saved.startTime || timeInputValue(new Date().toISOString()),
+      endTime: saved.endTime || "",
+      exercises: saved.exercises
+    };
+    return true;
+  }
+
+  draft = freshDraft();     // not resetDraft(): that would clear what we are about to restore
+
+  /* One listener for the whole screen rather than one per control, so a new
+     field can never be added and silently miss being saved. */
+  (function autosaveDraft() {
+    var screen = document.getElementById("screen-log");
+    var timer = null;
+    var schedule = function () {
+      clearTimeout(timer);
+      timer = setTimeout(saveDraft, 250);
+    };
+    ["input", "change", "click"].forEach(function (evt) {
+      screen.addEventListener(evt, schedule, true);
+    });
+  })();
 
   /* Shared editor for exercise blocks + set rows -- used by both the Log tab
      and the Edit Workout sheet, so the two always behave identically. */
@@ -2209,7 +2213,8 @@ import { loadState, saveState } from "./store.js";
 
       var last = lastSessionFor(blk.exerciseId, excludeWorkoutId);
       var lastLine = last
-        ? '<div class="last-time">Last time <strong>' + esc(summarizeSets(last.block.sets, metricOf(last.block))) +
+        ? '<div class="last-time">Last time <strong>' +
+            esc(summarizeSets(last.block.sets, metricOf(last.block), last.block.equipment)) +
             '</strong> &middot; ' + shortDate(last.workout.performedAt) + '</div>'
         : '<div class="last-time is-new">First time logging this</div>';
 
@@ -2232,8 +2237,9 @@ import { loadState, saveState } from "./store.js";
           firstCell = '<input type="number" inputmode="numeric" placeholder="Reps" class="set-v1" value="' +
             esc(s.reps == null ? "" : s.reps) + '">';
         }
+        var col2 = metric === "distance" ? cfg.col2 : weightLabel(blk);
         var weightCells = noWt ? "" :
-          '<input type="number" inputmode="decimal" placeholder="' + cfg.col2 + '" class="set-v2" value="' + esc(v2) + '">' +
+          '<input type="number" inputmode="decimal" placeholder="' + esc(col2) + '" class="set-v2" value="' + esc(v2) + '">' +
           '<button class="unit-toggle" data-unit-toggle>' + (s[unitKey] || cfg.units[0]) + '</button>';
         return '' +
           '<div class="set-row' + (dur ? " has-duration" : "") + (noWt ? " no-weight" : "") +
@@ -2284,7 +2290,9 @@ import { loadState, saveState } from "./store.js";
             (dur
               ? '<span class="dur-head"><span>Hr</span><span>Min</span><span>Sec</span></span>'
               : '<span>' + cfg.col1 + '</span>') +
-            (noWt ? '<span></span>' : '<span>' + cfg.col2 + '</span><span></span><span></span>') +
+            (noWt ? '<span></span>'
+                  : '<span>' + esc(metric === "distance" ? cfg.col2 : weightLabel(blk)) +
+                    '</span><span></span><span></span>') +
           '</div>' +
           rows +
           '<div class="block-foot">' +
@@ -2350,16 +2358,7 @@ import { loadState, saveState } from "./store.js";
         var cut = raw.indexOf(":");                 // a custom name may contain one
         var blk = draftObj.exercises[Number(raw.slice(0, cut))];
         var eq = raw.slice(cut + 1);
-        var hadWeightBox = !dropsWeight(blk, metricOf(blk));
         blk.equipment = blk.equipment === eq ? null : eq;   // tap again to clear
-        var hasWeightBox = !dropsWeight(blk, metricOf(blk));
-        if (hasWeightBox === hadWeightBox) {
-          // the sets look the same either way -- just move the highlight, so
-          // the rail keeps both its scroll position and your place in it
-          [].forEach.call(btn.parentNode.children, function (b) { b.classList.remove("selected"); });
-          if (blk.equipment) btn.classList.add("selected");
-          return;
-        }
         rerender();
       });
     });
@@ -2645,7 +2644,7 @@ import { loadState, saveState } from "./store.js";
         gymId: draft.gymId || null,
         title: titleInput.value.trim() || null,
         performedAt: isoFromDateTime(draft.date, draft.startTime),
-        endedAt: endIsoFrom(draft.date, draft.startTime, draft.endTime),
+        endedAt: defaultEndIso(draft),
         calories: cals != null && !isNaN(cals) ? cals : null,
         exercises: cleanExercises
       };
@@ -3219,7 +3218,163 @@ import { loadState, saveState } from "./store.js";
     });
 
     renderCalendar(me.id, true);
+    renderHomeDay();
+  }
+
+  /* The selected day, under the calendar: did you train, and who else did.
+     Every entry is a full-width row; tapping one opens that session. If you
+     logged nothing that day, your row is the way to log it, already dated. */
+  function renderHomeDay() {
+    var el = document.getElementById("home-day");
+    var key = selectedDayKey || localDayKey(new Date().toISOString());
+    var d = dateFromDayKey(key);
+    var iso = d.toISOString();
+    var isToday = key === localDayKey(new Date().toISOString());
+    var isFuture = d > new Date(new Date().setHours(23, 59, 59, 999));
+    var dayName = isToday ? "Today" : calendarDate(iso);
+
+    var mine = myWorkouts().filter(function (wk) { return localDayKey(wk.performedAt) === key; })
+      .sort(function (a, b) { return new Date(a.performedAt) - new Date(b.performedAt); });
+
+    var friends = friendsOf(state.me.id);
+    var theirs = [];
+    friends.forEach(function (u) {
+      workoutsOf(u.id).forEach(function (wk) {
+        if (localDayKey(wk.performedAt) === key) theirs.push({ user: u, wk: wk });
+      });
+    });
+    theirs.sort(function (a, b) { return new Date(b.wk.performedAt) - new Date(a.wk.performedAt); });
+
+    var trainedIds = {};
+    theirs.forEach(function (r) { trainedIds[r.user.id] = true; });
+    var count = Object.keys(trainedIds).length;
+
+    var row = function (user, who, wk, extra) {
+      var gymObj = wk.gymId ? findGym(wk.gymId) : null;
+      return '<button class="home-day-row" data-day-workout="' + wk.id + '">' +
+        avatarHtml(user) +
+        '<span class="person-body">' +
+          '<span class="person-name">' + esc(who) + ' <span class="home-day-title">' +
+            esc(wk.title || "Workout") + '</span></span>' +
+          '<span class="person-sub">' +
+            [esc(formatTime(wk.performedAt)), gymObj ? esc(gymLabel(gymObj)) : null]
+              .concat(extra || []).concat(sessionFacts(wk).map(esc))
+              .filter(Boolean).join(' &middot; ') +
+          '</span></span>' +
+        '<span class="chevron">&rsaquo;</span></button>';
+    };
+
+    var html = '<div class="home-day-head"><span class="home-day-name">' + esc(dayName) + '</span>' +
+      (friends.length
+        ? '<span class="home-day-count">' + count + ' of ' + friends.length +
+            (friends.length === 1 ? ' friend' : ' friends') + ' trained</span>'
+        : '') + '</div>';
+
+    html += mine.length
+      ? mine.map(function (wk) { return row(state.me, "You", wk); }).join("")
+      : (isFuture ? ""
+          : '<button class="home-day-row is-log" id="day-log">' +
+              '<span class="home-day-plus">+</span>' +
+              '<span class="person-body">' +
+                '<span class="person-name">' + (isToday ? "You haven\u2019t logged today" : "You didn\u2019t log this day") + '</span>' +
+                '<span class="person-sub">Tap to log a workout for ' + esc(isToday ? "today" : calendarDate(iso)) + '</span>' +
+              '</span><span class="chevron">&rsaquo;</span></button>');
+
+    html += theirs.map(function (r) { return row(r.user, r.user.name, r.wk); }).join("");
+
+    if (!friends.length) {
+      html += '<button class="home-day-row is-muted" id="day-add-friends">' +
+        '<span class="person-body"><span class="person-sub">Add friends to see who trained</span></span>' +
+        '<span class="chevron">&rsaquo;</span></button>';
+    } else if (!theirs.length) {
+      html += '<div class="home-day-empty">' +
+        (isFuture ? "Nothing logged yet." : "Nobody you follow logged " + (isToday ? "yet today." : "this day.")) + '</div>';
+    }
+
+    el.innerHTML = html;
+
+    el.querySelectorAll("[data-day-workout]").forEach(function (b) {
+      b.addEventListener("click", function () { openWorkoutDetail(b.getAttribute("data-day-workout")); });
+    });
+    var logBtn = el.querySelector("#day-log");
+    if (logBtn) logBtn.addEventListener("click", function () {
+      resetDraft();
+      draft.date = dateInputValue(iso);
+      activateTab("log");
+      if (!isToday) showToast("Logging for " + calendarDate(iso) + ".");
+    });
+    var addBtn = el.querySelector("#day-add-friends");
+    if (addBtn) addBtn.addEventListener("click", function () { activateTab("friends"); });
+  }
+
+  /* ----------------------------- profile ----------------------------- */
+
+  /* Everything that is "you over time": who you are, the all-time numbers,
+     your gyms and your whole history. Home stays about today. */
+  function renderProfile() {
+    var me = state.me;
+    var mine = myWorkouts();
+    var streak = computeStreak(me.id);
+    var first = mine.slice().sort(function (a, b) {
+      return new Date(a.performedAt) - new Date(b.performedAt);
+    })[0];
+
+    document.getElementById("profile-head").innerHTML =
+      avatarHtml(me, "is-big") +
+      '<div class="profile-name">' + esc(me.name) + '</div>' +
+      '<div class="profile-actions">' +
+        '<button class="btn btn-ghost" id="pick-photo">' +
+          (me.avatar ? "Change photo" : "Add photo") + '</button>' +
+        (me.avatar ? '<button class="btn btn-ghost" id="drop-photo">Remove</button>' : '') +
+        '<button class="btn btn-ghost" id="rename-me">Rename</button>' +
+      '</div>';
+
+    document.getElementById("profile-alltime").innerHTML = [
+      { value: mine.length, label: mine.length === 1 ? "Workout" : "Workouts" },
+      { value: gymsOf(me.id).length, label: "Gyms" },
+      { value: streak.best, label: "Best streak" },
+      { value: first ? shortDate(first.performedAt) : "--", label: "First logged" }
+    ].map(function (t) {
+      return '<div class="stat-tile"><span class="num">' + esc(String(t.value)) +
+        '</span><span class="label">' + esc(t.label) + '</span></div>';
+    }).join("");
+
+    var fileInput = document.getElementById("avatar-input");
+    document.getElementById("pick-photo").addEventListener("click", function () { fileInput.click(); });
+    var drop = document.getElementById("drop-photo");
+    if (drop) {
+      drop.addEventListener("click", function () {
+        updateMe("avatar", null);
+        renderProfile();
+        renderHome();
+      });
+    }
+    document.getElementById("rename-me").addEventListener("click", openRename);
+
+    renderGyms();
     renderProfileWorkouts(mine, true);
+  }
+
+  /* The name is edited in a dialog rather than a live field: a text input
+     that re-renders the screen on blur is how you tear it out mid-event. */
+  function openRename() {
+    var el = openListSheet("Display name",
+      '<input type="text" id="rename-input" value="' + esc(state.me.name) + '" placeholder="Your name">' +
+      '<p class="setting-help">Shown on your sessions, and to friends once accounts are in.</p>' +
+      '<button class="btn btn-primary btn-block" id="rename-save">Save</button>');
+
+    var input = el.querySelector("#rename-input");
+    input.focus();
+    el.querySelector("#rename-save").addEventListener("click", function () {
+      var v = titleCase(input.value);
+      if (!v) { showToast("Give yourself a name."); return; }
+      updateMe("name", v);
+      state.workouts.forEach(function (w) { if (w.userId === state.me.id) w.userName = v; });
+      persist();
+      closeListSheet();
+      renderProfile();
+      renderHome();
+    });
   }
 
 
@@ -3277,7 +3432,10 @@ import { loadState, saveState } from "./store.js";
     });
   }
 
-  document.getElementById("profile-search").addEventListener("input", renderHome);
+  document.getElementById("profile-search").addEventListener("input", function () {
+    // only the list, so the search box keeps focus while you type
+    renderProfileWorkouts(myWorkouts(), true);
+  });
 
   /* The storage warning matters once; after that it's clutter. */
   (function storageNote() {
@@ -3296,6 +3454,83 @@ import { loadState, saveState } from "./store.js";
     progressQuery = e.target.value;
     renderProgress();
   });
+
+  /* ----------------------------- the keyboard bar ----------------------------- */
+
+  /* Typing 187.5 is slower than tapping +2.5. The bar rides above the
+     keyboard on whichever weight field has focus, and the steps follow the
+     unit, since 2.5kg is not a plate anyone owns. */
+  var BUMPS = { lb: [2.5, 5, 10], kg: [1.25, 2.5, 5] };
+  var bumpTarget = null;
+  var kbCovered = 0;      // how much of the screen the keyboard is taking
+
+  function bumpSteps() {
+    var unit = "lb";
+    if (bumpTarget) {
+      var row = bumpTarget.closest(".set-row");
+      var toggle = row && row.querySelector("[data-unit-toggle]");
+      if (toggle && toggle.textContent.trim() === "kg") unit = "kg";
+    }
+    return BUMPS[unit];
+  }
+
+  function showKbBar(input) {
+    bumpTarget = input;
+    var steps = bumpSteps();
+    var bar = document.getElementById("kb-bar");
+    bar.querySelectorAll("[data-bump]").forEach(function (chip) {
+      var i = Number(chip.getAttribute("data-bump"));
+      chip.textContent = i < 0 ? "\u2212" + steps[0] : "+" + steps[i];
+    });
+    bar.hidden = false;
+  }
+
+  function hideKbBar() {
+    document.getElementById("kb-bar").hidden = true;
+    bumpTarget = null;
+  }
+
+  (function wireKbBar() {
+    var bar = document.getElementById("kb-bar");
+
+    document.addEventListener("focusin", function (e) {
+      // only once a soft keyboard is actually up: on a laptop the bar would
+      // just sit on top of the tab bar for no reason
+      if (e.target.classList && e.target.classList.contains("set-v2")) {
+        if (kbCovered > 80) showKbBar(e.target);
+      } else if (!bar.contains(e.target)) hideKbBar();
+    });
+    document.addEventListener("focusout", function (e) {
+      // a chip steals focus for an instant; let it finish before hiding
+      setTimeout(function () {
+        if (document.activeElement === e.target) return;
+        if (!document.activeElement || !document.activeElement.classList ||
+            !document.activeElement.classList.contains("set-v2")) hideKbBar();
+      }, 120);
+    });
+
+    bar.addEventListener("mousedown", function (e) { e.preventDefault(); });
+    bar.addEventListener("touchstart", function (e) { e.preventDefault(); }, { passive: false });
+
+    bar.querySelectorAll("[data-bump]").forEach(function (chip) {
+      chip.addEventListener("click", function () {
+        if (!bumpTarget) return;
+        var i = Number(chip.getAttribute("data-bump"));
+        var steps = bumpSteps();
+        var delta = i < 0 ? -steps[0] : steps[i];
+        var now = parseFloat(bumpTarget.value);
+        var next = Math.max(0, (isNaN(now) ? 0 : now) + delta);
+        bumpTarget.value = Math.round(next * 100) / 100;
+        bumpTarget.dispatchEvent(new Event("input", { bubbles: true }));
+        buzz(8);
+      });
+    });
+
+    document.getElementById("kb-done").addEventListener("click", function () {
+      if (bumpTarget) bumpTarget.blur();
+      hideKbBar();
+    });
+  })();
 
   /* ----------------------------- theme ----------------------------- */
 
@@ -3334,6 +3569,12 @@ import { loadState, saveState } from "./store.js";
       frame.style.bottom = covered + "px";
       // modals sit outside the frame, so they read the same number from here
       document.documentElement.style.setProperty("--kb", covered + "px");
+      kbCovered = covered;
+      // the keyboard often arrives after the focus event, so catch it here too
+      var focused = document.activeElement;
+      if (covered > 80 && focused && focused.classList &&
+          focused.classList.contains("set-v2")) showKbBar(focused);
+      else if (!covered) hideKbBar();
       // a tab bar pinned above the keyboard is just wasted room
       document.body.classList.toggle("kb-open", covered > 80);
     }
@@ -3358,6 +3599,10 @@ import { loadState, saveState } from "./store.js";
   /* ----------------------------- boot ----------------------------- */
 
   applyTheme();
+  if (restoreDraft()) {
+    renderLog();
+    showToast("Picked your workout back up.");
+  }
   persist();
   renderHome();
 })();

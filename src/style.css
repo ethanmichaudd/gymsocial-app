@@ -385,7 +385,7 @@
   }
   .detail-ex:first-of-type { border-top: none; padding-top: 0; }
   /* the second half of a superset tucks in under the first */
-  .detail-ex.is-linked { border-top: none; padding-top: 0; margin-top: -4px; padding-left: 12px; }
+  .detail-ex.is-linked { border-top: none; padding-top: 0; margin-top: -4px; }
   .detail-ex-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
   .detail-ex-name { font-size: 15px; font-weight: 700; }
   .detail-ss {
@@ -630,6 +630,25 @@
 
   /* ---------- the are-you-sure dialog ---------- */
   /* Centred rather than a bottom sheet: it is a question, not a page. */
+  /* ---------- the bar above the keyboard ---------- */
+  /* display:flex would otherwise beat the hidden attribute */
+  #kb-bar[hidden] { display: none; }
+  #kb-bar {
+    position: fixed; left: 0; right: 0; bottom: var(--kb, 0px);
+    z-index: 35; display: flex; gap: 8px; justify-content: center;
+    padding: 8px 10px calc(8px + env(safe-area-inset-bottom));
+    background: var(--surface); border-top: 1px solid var(--border);
+  }
+  .kb-chip {
+    flex: 1; max-width: 90px;
+    background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); color: var(--text);
+    font-family: inherit; font-size: 14px; font-weight: 700;
+    padding: 10px 0; cursor: pointer;
+  }
+  .kb-chip:active { background: var(--accent-bg); border-color: var(--accent); }
+  .kb-chip.is-done { color: var(--accent-strong); font-weight: 600; }
+
   .modal-overlay.is-dialog { align-items: center; padding: 24px; }
   .confirm-box {
     width: 100%; max-width: 360px;
@@ -655,7 +674,35 @@
   .avatar.is-big { width: 92px; height: 92px; font-size: 32px; }
   .profile-name { font-size: 19px; font-weight: 700; }
   .profile-actions { display: flex; gap: 8px; }
+  .profile-actions { flex-wrap: wrap; justify-content: center; }
   .profile-actions .btn { padding: 9px 16px; font-size: 13px; }
+
+  /* the selected calendar day, under the calendar */
+  .home-day { margin-top: 18px; display: flex; flex-direction: column; gap: 8px; }
+  .home-day-head { display: flex; align-items: baseline; justify-content: space-between; padding: 0 2px 2px; }
+  .home-day-name { font-size: 15px; font-weight: 700; }
+  .home-day-count { font-size: 12px; color: var(--text-muted); }
+  .home-day-row {
+    display: flex; align-items: center; gap: 12px; width: 100%;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-md); padding: 12px 14px;
+    font-family: inherit; text-align: left; cursor: pointer; color: var(--text);
+  }
+  .home-day-row:active { border-color: var(--accent); }
+  .home-day-row .avatar { width: 36px; height: 36px; font-size: 13px; flex-shrink: 0; }
+  .home-day-row .chevron { color: var(--text-faint); flex-shrink: 0; }
+  .home-day-title { font-weight: 500; color: var(--text-muted); }
+  .home-day-row.is-log { border-style: dashed; border-color: var(--accent); background: var(--accent-bg); }
+  .home-day-row.is-log .person-name { color: var(--accent-strong); }
+  .home-day-plus {
+    width: 36px; height: 36px; border-radius: 50%; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--accent); color: var(--on-accent); font-size: 20px; font-weight: 600;
+  }
+  .home-day-row.is-muted { background: none; }
+  .home-day-empty { font-size: 13px; color: var(--text-faint); padding: 4px 2px; }
+  .cal-grid .cal-day.selected { background: var(--accent); color: var(--on-accent); }
+  .cal-day.selected .cal-flame path { fill: var(--on-accent); }
 
   .avatar.has-photo {
     background-size: cover; background-position: center;
@@ -743,6 +790,13 @@
     gap: 10px; margin-bottom: 14px;
   }
   .day-nav-label { font-weight: 700; font-size: 15px; }
+
+  /* the day sheet: your sessions, then everyone else's */
+  .day-section {
+    font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--text-faint); margin: 16px 0 8px;
+  }
+  .day-section:first-child { margin-top: 2px; }
 
   /* who trained on this day, at a glance */
   .friend-strip {
