@@ -1261,3 +1261,19 @@
   }
   .handle-field span { color: var(--text-faint); font-weight: 600; }
   .handle-field input { border: none; background: transparent; flex: 1; min-width: 0; }
+
+  /* ---------- account: username and display name ---------- */
+  .account-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 0; border-bottom: 1px solid var(--border-soft);
+  }
+  .account-label { font-size: 13px; color: var(--text-muted); flex-shrink: 0; }
+  .account-value {
+    flex: 1; min-width: 0; text-align: right; font-size: 15px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .account-value .is-unset { color: var(--text-faint); font-weight: 500; }
+  .account-edit {
+    background: none; border: none; cursor: pointer; padding: 4px 0;
+    font-family: inherit; font-size: 13px; font-weight: 600; color: var(--accent-strong);
+  }

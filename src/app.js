@@ -1127,8 +1127,18 @@ import {
     if (user) {
       return '<div class="setting-block">' +
         '<label class="field-label">Account</label>' +
-        '<p class="account-line">Signed in as <strong>' +
-          esc(usesUsernameLogin(user) ? "@" + (state.me.handle || "") : user.email) + '</strong></p>' +
+        '<div class="account-row">' +
+          '<span class="account-label">Signed in as</span>' +
+          '<strong class="account-value">@' + esc(state.me.handle || "") + '</strong>' +
+          '<button class="account-edit" id="account-username">Change</button>' +
+        '</div>' +
+        '<div class="account-row">' +
+          '<span class="account-label">Display name</span>' +
+          '<strong class="account-value">' +
+            (state.me.name && state.me.name !== "You" ? esc(state.me.name) : '<span class="is-unset">Not set</span>') +
+          '</strong>' +
+          '<button class="account-edit" id="account-name">Change</button>' +
+        '</div>' +
         '<p class="setting-help" id="sync-line" style="margin-top:4px;">' + esc(syncLine()) + '</p>' +
         '<div class="action-row" style="margin-bottom:0;">' +
           '<button class="btn btn-ghost" id="sync-now-btn">Sync now</button>' +
@@ -1246,6 +1256,11 @@ import {
   });
 
   function wireAccount(el) {
+    var uBtn = el.querySelector("#account-username");
+    if (uBtn) uBtn.addEventListener("click", openUsername);
+    var nBtn = el.querySelector("#account-name");
+    if (nBtn) nBtn.addEventListener("click", openRename);
+
     var nowBtn = el.querySelector("#sync-now-btn");
     if (nowBtn) nowBtn.addEventListener("click", function () { syncNow(); });
 
@@ -3715,6 +3730,7 @@ import {
       closeListSheet();
       renderProfile();
       renderHome();
+      if (currentTab === "settings") renderSettings();
     });
   }
 
@@ -3748,6 +3764,7 @@ import {
         .then(function (name) {
           closeListSheet();
           renderProfile();
+          if (currentTab === "settings") renderSettings();
           showToast("You're @" + name + " now.");
         })
         .catch(function (err) {
