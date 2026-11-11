@@ -7,3 +7,6 @@ dist/
 # Capacitor generates these; recreate with `npx cap add ios|android`
 /ios
 /android
+
+# push keys (private)
+.env.vapid

@@ -122,6 +122,8 @@ export async function signUp(username, password) {
  * it doesn't inherit your workouts. Everything synced is safe in the cloud.
  */
 export async function signOut(storageKey) {
+  // stop this phone getting the old account's notifications
+  try { await disablePush(); } catch (e) { /* not subscribed */ }
   // a deleted or expired session can make this fail; sign out locally anyway
   try { await supabase.auth.signOut(); }
   catch (e) { await supabase.auth.signOut({ scope: "local" }).catch(() => {}); }
@@ -173,7 +175,7 @@ export function startSync({ getState, onChange, onStatus }) {
     sync.user = session ? { id: session.user.id, email: session.user.email } : null;
     if (!sync.user) { setStatus("off"); return; }
     // the listener must not await Supabase calls itself, so hop off it
-    if (sync.user.id !== before) setTimeout(() => syncNow(), 0);
+    if (sync.user.id !== before) setTimeout(() => { syncNow(); refreshPushSubscription(); }, 0);
   });
 
   document.addEventListener("visibilitychange", () => {
@@ -932,4 +934,96 @@ export async function setUsername(raw) {
   if (meRow) meRow.handle = name;
   persistLocal(state);
   return name;
+}
+
+/* =========================================================================
+   Push notifications
+   iPhone only allows Web Push for apps added to the Home Screen (iOS 16.4+).
+   The public key below pairs with VAPID_PRIVATE_KEY in the Edge Function's
+   secrets; it is safe to ship.
+   ========================================================================= */
+
+const VAPID_PUBLIC_KEY =
+  "BE8F9eL7NWqv9sHKOBWwdetyKhe-j_0Iuf-zBSNqGlxO7ZQpE2UJXtwRV5sPe4zy0PKHJ2M-FRfFpORFF5nFr_A";
+
+function isIOS() {
+  return /iphone|ipad|ipod/i.test(navigator.userAgent) ||
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+}
+
+function isStandalone() {
+  return window.navigator.standalone === true ||
+    window.matchMedia("(display-mode: standalone)").matches;
+}
+
+/** "ok", "needs-install" (iPhone, opened in Safari) or "unsupported". */
+export function pushSupport() {
+  if (isIOS() && !isStandalone()) return "needs-install";
+  if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) {
+    return "unsupported";
+  }
+  return "ok";
+}
+
+/** "granted", "denied" or "default" (never asked). */
+export function pushPermission() {
+  return "Notification" in window ? Notification.permission : "default";
+}
+
+async function currentSubscription() {
+  const reg = await navigator.serviceWorker.ready;
+  return reg.pushManager.getSubscription();
+}
+
+/** On if this phone is subscribed and allowed. */
+export async function pushEnabled() {
+  if (pushSupport() !== "ok" || pushPermission() !== "granted") return false;
+  return Boolean(await currentSubscription());
+}
+
+function keyBytes(base64url) {
+  const pad = "=".repeat((4 - (base64url.length % 4)) % 4);
+  const raw = atob((base64url + pad).replace(/-/g, "+").replace(/_/g, "/"));
+  return Uint8Array.from(raw, (c) => c.charCodeAt(0));
+}
+
+async function saveSubscription(sub) {
+  const j = sub.toJSON();
+  const { error } = await supabase.rpc("claim_push_subscription", {
+    p_endpoint: j.endpoint, p_p256dh: j.keys.p256dh, p_auth: j.keys.auth,
+  });
+  if (error) throw error;
+}
+
+/**
+ * Turns notifications on: asks permission (must run straight from a tap),
+ * subscribes this phone, and records it against your account.
+ */
+export async function enablePush() {
+  if (!sync.user) throw new Error("Sign in first.");
+  if (pushSupport() === "needs-install") throw new Error("needs-install");
+  if (pushSupport() !== "ok") throw new Error("This browser can't receive notifications.");
+  const perm = await Notification.requestPermission();
+  if (perm !== "granted") throw new Error(perm === "denied" ? "denied" : "dismissed");
+  const reg = await navigator.serviceWorker.ready;
+  const sub = (await reg.pushManager.getSubscription()) ||
+    (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(VAPID_PUBLIC_KEY) }));
+  await saveSubscription(sub);
+}
+
+export async function disablePush() {
+  if (pushSupport() !== "ok") return;
+  const sub = await currentSubscription();
+  if (!sub) return;
+  if (sync.user) await supabase.from("push_subscriptions").delete().eq("endpoint", sub.endpoint);
+  await sub.unsubscribe();
+}
+
+/* After signing in, make sure an existing subscription points at this account. */
+async function refreshPushSubscription() {
+  try {
+    if (pushSupport() !== "ok" || pushPermission() !== "granted") return;
+    const sub = await currentSubscription();
+    if (sub) await saveSubscription(sub);
+  } catch (e) { console.warn("Push subscription:", e); }
 }

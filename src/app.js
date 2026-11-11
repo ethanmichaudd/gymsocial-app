@@ -2,7 +2,8 @@ import {
   loadState, saveState, cloudEnabled, currentUser, startSync, syncNow, syncStatus,
   signIn, signUp, signOut, newId, shrinkPhoto, photoSrc,
   refreshSocial, searchPeople, sendFriendRequest, acceptFriendRequest, declineFriendRequest,
-  cancelFriendRequest, removeFriend, setReaction, setUsername, USERNAME_RULE, usesUsernameLogin
+  cancelFriendRequest, removeFriend, setReaction, setUsername, USERNAME_RULE, usesUsernameLogin,
+  pushSupport, pushPermission, pushEnabled, enablePush, disablePush
 } from "./store.js";
 
 (function () {
@@ -972,6 +973,7 @@ import {
     el.innerHTML =
       '<div>' +
         accountBlockHtml() +
+        notifyBlockHtml() +
         '<div class="setting-block">' +
           '<label class="field-label">Backup</label>' +
           '<div class="action-row" style="margin-bottom:0;">' +
@@ -1033,6 +1035,7 @@ import {
 
     wireEraseButton(el);
     wireAccount(el);
+    wireNotify(el);
     el.querySelectorAll("[data-backup]").forEach(function (btn) {
       btn.addEventListener("click", function () {
         if (btn.getAttribute("data-backup") === "export") openExportSheet();
@@ -1105,6 +1108,78 @@ import {
         renderHome();
       });
     });
+  }
+
+  /* ----------------------------- notifications ----------------------------- */
+
+  /* One switch. On an iPhone it only works from the Home Screen app, so in
+     Safari it explains how to get there instead of failing quietly. */
+  function notifyBlockHtml() {
+    if (!cloudEnabled() || !currentUser()) return "";
+    var support = pushSupport();
+    var denied = pushPermission() === "denied";
+    var help = support === "needs-install"
+      ? 'Notifications only work in the Home Screen app. In Safari tap <strong>Share</strong> \u2192 ' +
+        '<strong>Add to Home Screen</strong>, then open GymSocial from your Home Screen and turn this on.'
+      : support === "unsupported"
+        ? "This browser can't receive notifications."
+        : denied
+          ? 'Notifications are blocked for GymSocial. Turn them back on in iPhone ' +
+            '<strong>Settings \u2192 Notifications \u2192 GymSocial</strong>.'
+          : "When friends log a workout, react to yours, or send you a friend request.";
+    var usable = support === "ok" && !denied;
+    return '<div class="setting-block">' +
+      '<div class="switch-row">' +
+        '<label class="field-label" for="notify-switch" style="margin:0;">Notifications</label>' +
+        '<button class="switch" id="notify-switch" role="switch" aria-checked="false"' +
+          (usable ? '' : ' disabled') + '><span></span></button>' +
+      '</div>' +
+      '<p class="setting-help" id="notify-help">' + help + '</p>' +
+    '</div>';
+  }
+
+  function wireNotify(el) {
+    var sw = el.querySelector("#notify-switch");
+    if (!sw) return;
+    var set = function (on) { sw.setAttribute("aria-checked", on ? "true" : "false"); };
+    if (!sw.disabled) pushEnabled().then(set).catch(function () { set(false); });
+
+    sw.addEventListener("click", function () {
+      var turningOn = sw.getAttribute("aria-checked") !== "true";
+      sw.disabled = true;
+      // enablePush asks for permission first thing: iOS only allows that
+      // straight from a tap, so nothing async may come before it
+      (turningOn ? enablePush() : disablePush())
+        .then(function () {
+          set(turningOn);
+          showToast(turningOn ? "Notifications on." : "Notifications off.");
+        })
+        .catch(function (err) {
+          var m = err && err.message;
+          if (m === "denied") renderSettings();     // swaps in the "blocked" help
+          else if (m === "dismissed") showToast("Notifications stay off.");
+          else showToast(m || "Couldn't change notifications.");
+        })
+        .then(function () { if (document.body.contains(sw)) sw.disabled = false; });
+    });
+  }
+
+  /* Tapping a notification opens the app at ?workout=<id> or ?friends=1, or,
+     if it was already open, the service worker posts that same URL here. */
+  var pendingWorkout = null;
+
+  function openFromUrl(href) {
+    var params = new URL(href, location.href).searchParams;
+    var wid = params.get("workout");
+    if (params.get("friends")) {
+      activateTab("friends");
+      openFriendsManage();
+    } else if (wid) {
+      activateTab("friends");
+      if (state.workouts.some(function (w) { return w.id === wid; })) openWorkoutDetail(wid);
+      else { pendingWorkout = wid; refreshSocial(true); }   // a friend's, not here yet
+    }
+    if (location.search) history.replaceState(null, "", location.pathname);
   }
 
   /* ----------------------------- account ----------------------------- */
@@ -4004,6 +4079,11 @@ import {
   /* ----------------------------- boot ----------------------------- */
 
   applyTheme();
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.addEventListener("message", function (e) {
+      if (e.data && e.data.type === "open-url") openFromUrl(e.data.url);
+    });
+  }
   if (restoreDraft()) {
     renderLog();
     showToast("Picked your workout back up.");
@@ -4015,9 +4095,16 @@ import {
      redraw whatever is on screen -- except mid-edit, where it would wipe
      what you're typing. */
   var wasAuthed = false;
+  if (/[?&](workout|friends)=/.test(location.search)) setTimeout(function () { openFromUrl(location.href); }, 0);
+
   startSync({
     getState: function () { return state; },
     onChange: function () {
+      if (pendingWorkout && state.workouts.some(function (w) { return w.id === pendingWorkout; })) {
+        var wid = pendingWorkout;
+        pendingWorkout = null;
+        setTimeout(function () { openWorkoutDetail(wid); }, 0);
+      }
       applyTheme();
       if (editingId || currentTab === "log") return;
       activateTab(currentTab);

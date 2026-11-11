@@ -1,5 +1,5 @@
 /* Cache the app shell so it opens with no connection. Bump CACHE on release. */
-const CACHE = "gymsocial-v42";
+const CACHE = "gymsocial-v43";
 
 self.addEventListener("install", (event) => {
   self.skipWaiting();
@@ -46,4 +46,37 @@ self.addEventListener("fetch", (event) => {
         })
     )
   );
+});
+
+/* ---------- push notifications ----------
+   The "notify" Edge Function sends { title, body, url, tag }. url is relative
+   to the app (e.g. "?workout=<id>"), so it works on GitHub Pages and locally. */
+self.addEventListener("push", (event) => {
+  let note = {};
+  try { note = event.data ? event.data.json() : {}; } catch (e) { note = { body: event.data && event.data.text() }; }
+  event.waitUntil(
+    self.registration.showNotification(note.title || "GymSocial", {
+      body: note.body || "",
+      tag: note.tag,                         // same tag replaces, so reactions don't pile up
+      icon: "icon-192.png",
+      badge: "icon-192.png",
+      data: { url: note.url || "./" },
+    })
+  );
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const target = new URL(event.notification.data.url || "./", self.registration.scope).href;
+  event.waitUntil((async () => {
+    const open = await clients.matchAll({ type: "window", includeUncontrolled: true });
+    for (const c of open) {
+      if (c.url.startsWith(self.registration.scope)) {
+        // the app is already running: tell it what to show, then bring it up
+        c.postMessage({ type: "open-url", url: target });
+        return c.focus();
+      }
+    }
+    return clients.openWindow(target);
+  })());
 });
