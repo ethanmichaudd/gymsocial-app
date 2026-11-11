@@ -2558,15 +2558,30 @@ import {
 
   function resetDraft() {
     draft = freshDraft();
+    ["log-title", "log-calories"].forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el) el.value = "";
+    });
     try { localStorage.removeItem(DRAFT_KEY); } catch (e) { /* nothing to clear */ }
   }
 
   /* A half-logged session used to live only in memory, so swiping the app
      away lost it. It is written out on every change now and picked back up
      on the next open. */
+  /* The title and calories live in plain inputs rather than on the draft,
+     so they are read in at save time -- otherwise a restore brings back the
+     sets but not what you called the session. */
+  function draftHasContent(d) {
+    return (d.exercises && d.exercises.length) || d.title || d.calories || d.photoData;
+  }
+
   function saveDraft() {
+    var t = document.getElementById("log-title");
+    var c = document.getElementById("log-calories");
+    if (t) draft.title = t.value;
+    if (c) draft.calories = c.value;
     try {
-      if (!draft.exercises || !draft.exercises.length) localStorage.removeItem(DRAFT_KEY);
+      if (!draftHasContent(draft)) localStorage.removeItem(DRAFT_KEY);
       else localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
     } catch (e) { /* storage full or blocked -- the session still works */ }
   }
@@ -2578,8 +2593,10 @@ import {
     var saved;
     try { saved = JSON.parse(raw); } catch (e) { return false; }
     if (!saved || !Array.isArray(saved.exercises)) return false;
-    if (!saved.exercises.length) return false;   // nothing worth restoring
+    if (!draftHasContent(saved)) return false;   // nothing worth restoring
     draft = {
+      title: saved.title || "",
+      calories: saved.calories || "",
       gymId: saved.gymId || "",
       date: saved.date || dateInputValue(new Date().toISOString()),
       startTime: saved.startTime || timeInputValue(new Date().toISOString()),
@@ -2604,6 +2621,12 @@ import {
     ["input", "change", "click"].forEach(function (evt) {
       screen.addEventListener(evt, schedule, true);
     });
+    // Swiping the app away gives no warning, but going to the background
+    // does -- write immediately then rather than trusting the 250ms timer.
+    document.addEventListener("visibilitychange", function () {
+      if (document.visibilityState === "hidden") { clearTimeout(timer); saveDraft(); }
+    });
+    window.addEventListener("pagehide", function () { clearTimeout(timer); saveDraft(); });
   })();
 
   /* Shared editor for exercise blocks + set rows -- used by both the Log tab
@@ -3045,6 +3068,7 @@ import {
       function () { return draft.photoData || null; },
       function (d) { draft.photoData = d; saveDraft(); });
     wireLogEvents();
+    saveDraft();
   }
 
   function wireLogEvents() {
@@ -3748,10 +3772,22 @@ import {
     });
     var logBtn = el.querySelector("#day-log");
     if (logBtn) logBtn.addEventListener("click", function () {
-      resetDraft();
-      draft.date = dateInputValue(iso);
-      activateTab("log");
-      if (!isToday) showToast("Logging for " + calendarDate(iso) + ".");
+      var start = function () {
+        resetDraft();
+        draft.date = dateInputValue(iso);
+        activateTab("log");
+        if (!isToday) showToast("Logging for " + calendarDate(iso) + ".");
+      };
+      // never throw away a workout someone is halfway through typing
+      saveDraft();
+      if (!draftHasContent(draft)) { start(); return; }
+      openConfirm({
+        title: "Discard your unsaved workout?",
+        body: "You have a workout in progress. Starting one for " +
+          (isToday ? "today" : calendarDate(iso)) + " clears it.",
+        confirmLabel: "Discard",
+        onConfirm: start
+      });
     });
     var addBtn = el.querySelector("#day-add-friends");
     if (addBtn && !signedOut()) addBtn.addEventListener("click", function () { activateTab("friends"); });
@@ -4102,6 +4138,8 @@ import {
     });
   }
   if (restoreDraft()) {
+    document.getElementById("log-title").value = draft.title || "";
+    document.getElementById("log-calories").value = draft.calories || "";
     renderLog();
     showToast("Picked your workout back up.");
   }
