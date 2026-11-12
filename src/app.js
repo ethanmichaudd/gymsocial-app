@@ -184,14 +184,25 @@ import {
   /* Four is enough to say something without turning into a keyboard. */
   var REACTIONS = ["\uD83D\uDCAA", "\uD83D\uDD25", "\uD83D\uDC4F", "\uD83D\uDE4C"];
 
+  /* No equipment in the names: that's picked on the rail, and each one
+     starts on what it's usually done with until you've logged it yourself. */
   var SEED_EXERCISE_NAMES = [
-    "Barbell Bench Press", "Incline Dumbbell Press", "Back Squat", "Deadlift",
-    "Romanian Deadlift", "Overhead Press", "Pull-Up", "Barbell Row",
+    "Bench Press", "Incline Press", "Back Squat", "Deadlift",
+    "Romanian Deadlift", "Overhead Press", "Pull-Up", "Bent-Over Row",
     "Bicep Curl", "Tricep Pushdown", "Lateral Raise", "Lat Pulldown",
     "Leg Press", "Plank", "Treadmill Run"
   ];
 
+  var DEFAULT_EQUIPMENT = {
+    "Bench Press": "Barbell", "Incline Press": "Dumbbell", "Back Squat": "Barbell",
+    "Deadlift": "Barbell", "Romanian Deadlift": "Barbell", "Overhead Press": "Barbell",
+    "Pull-Up": "Bodyweight", "Bent-Over Row": "Barbell", "Bicep Curl": "Dumbbell",
+    "Tricep Pushdown": "Cable", "Lateral Raise": "Dumbbell", "Lat Pulldown": "Cable",
+    "Leg Press": "Machine", "Plank": "Bodyweight"
+  };
+
   var EXERCISE_CATEGORIES = {
+    "Bench Press": "push", "Incline Press": "push", "Bent-Over Row": "pull",
     "Barbell Bench Press": "push", "Incline Dumbbell Press": "push", "Overhead Press": "push",
     "Lateral Raise": "push", "Tricep Pushdown": "push",
     "Pull-Up": "pull", "Lat Pulldown": "pull", "Barbell Row": "pull", "Bicep Curl": "pull",
@@ -321,8 +332,8 @@ import {
     var byName = {};
     (s.exercises || []).forEach(function (e) { byName[e.name] = e.id; });
     var plan = [
-      ["Barbell Bench Press", "Barbell", [[8, 165], [8, 175], [6, 185]]],
-      ["Incline Dumbbell Press", "Dumbbell", [[10, 60], [10, 60], [8, 65]]],
+      ["Bench Press", "Barbell", [[8, 165], [8, 175], [6, 185]]],
+      ["Incline Press", "Dumbbell", [[10, 60], [10, 60], [8, 65]]],
       ["Lateral Raise", "Dumbbell", [[15, 20], [15, 20], [12, 25]]],
       ["Tricep Pushdown", "Cable", [[12, 50], [12, 55], [10, 60]]]
     ].filter(function (row) { return byName[row[0]]; });
@@ -433,6 +444,16 @@ import {
     if (!rows.length) return '';
     return '<div class="reactors"><div class="manage-head">Reactions (' + rows.length + ')</div>' +
       rows.join("") + '</div>';
+  }
+
+  /* Under your own workout on Home: each reaction you got, with a count.
+     Not buttons -- you don't react to yourself; tap the workout for names. */
+  function receivedReactionsHtml(wk) {
+    var all = reactionsOf(wk);
+    var chips = REACTIONS.filter(function (e) { return (all[e] || []).length; }).map(function (e) {
+      return '<span class="react is-static">' + e + '<span class="react-n">' + all[e].length + '</span></span>';
+    });
+    return chips.length ? '<div class="react-bar">' + chips.join("") + '</div>' : '';
   }
 
   /* A line on your own cards in History: who reacted, at a glance. */
@@ -3146,7 +3167,8 @@ import {
   function blockFromLastTime(exObj, excludeWorkoutId, equipment) {
     var last = lastSessionFor(exObj.id, excludeWorkoutId);
     var metric = last ? metricOf(last.block) : (exObj.metric || "reps");
-    var equip = equipment || (last && last.block.equipment) || exObj.equipment || null;
+    var equip = equipment || (last && last.block.equipment) || exObj.equipment ||
+      DEFAULT_EQUIPMENT[exObj.name] || null;
     if (!usesEquipment(metric)) equip = null;
     return {
       exerciseId: exObj.id,
@@ -3308,7 +3330,8 @@ import {
   ];
   // what a bare word is short for once the equipment is taken off
   var EXERCISE_ALIASES = { "bench": "Bench Press", "curl": "Bicep Curl", "bicep curl": "Bicep Curl",
-    "biceps curl": "Bicep Curl", "squat": "Back Squat", "row": "Barbell Row", "pulldown": "Lat Pulldown" };
+    "biceps curl": "Bicep Curl", "squat": "Back Squat", "row": "Bent-Over Row", "pulldown": "Lat Pulldown",
+    "incline bench": "Incline Press", "incline bench press": "Incline Press" };
 
   function singularWord(w) {
     var l = w.toLowerCase();
@@ -3378,10 +3401,9 @@ import {
      name drops out of the picker. Safe to run on every open. */
   function migrateExerciseNames() {
     var changed = false;
-    var seeded = SEED_EXERCISE_NAMES.map(function (n) { return n.toLowerCase(); });
     state.settings.retiredExercises = state.settings.retiredExercises || [];
     state.exercises.slice().forEach(function (ex) {
-      if (retiredExercise(ex.id) || seeded.indexOf(ex.name.toLowerCase()) !== -1) return;
+      if (retiredExercise(ex.id)) return;
       var parsed = parseExerciseName(ex.name);
       if (!parsed || exerciseKey(parsed.base) === exerciseKey(ex.name)) return;
       var target = exerciseByKey(parsed.base);
@@ -4061,6 +4083,14 @@ import {
         '<span class="chevron">&rsaquo;</span></button>';
     };
 
+    /* A friend's workout gets the reaction bar, same as the feed, so you can
+       react without leaving Home. Yours shows what people sent you. */
+    var card = function (user, who, wk) {
+      var isMe = user.id === state.me.id;
+      var below = isMe ? receivedReactionsHtml(wk) : reactionBarHtml(wk);
+      return '<div class="home-day-card">' + row(user, who, wk) + below + '</div>';
+    };
+
     var html = '<div class="home-day-head"><span class="home-day-name">' + esc(dayName) + '</span>' +
       (friends.length
         ? '<span class="home-day-count">' + count + ' of ' + friends.length +
@@ -4068,7 +4098,7 @@ import {
         : '') + '</div>';
 
     html += mine.length
-      ? mine.map(function (wk) { return row(state.me, "You", wk); }).join("")
+      ? mine.map(function (wk) { return card(state.me, "You", wk); }).join("")
       : (isFuture ? ""
           : '<button class="home-day-row is-log" id="day-log">' +
               '<span class="home-day-plus">+</span>' +
@@ -4077,7 +4107,7 @@ import {
                 '<span class="person-sub">Tap to log a workout for ' + esc(isToday ? "today" : calendarDate(iso)) + '</span>' +
               '</span><span class="chevron">&rsaquo;</span></button>');
 
-    html += theirs.map(function (r) { return row(r.user, r.user.name, r.wk); }).join("");
+    html += theirs.map(function (r) { return card(r.user, r.user.name, r.wk); }).join("");
 
     if (!friends.length) {
       html += '<button class="home-day-row is-muted" id="day-add-friends"' +
@@ -4092,6 +4122,7 @@ import {
     }
 
     el.innerHTML = html;
+    wireReactions(el, function () { renderHomeDay(); renderFriends(); });
 
     el.querySelectorAll("[data-day-workout]").forEach(function (b) {
       b.addEventListener("click", function () { openWorkoutDetail(b.getAttribute("data-day-workout")); });

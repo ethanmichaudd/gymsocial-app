@@ -1381,3 +1381,13 @@
   .reactor-emoji { font-size: 20px; }
   .react-summary { font-size: 12px; color: var(--text-muted); margin-left: 6px; white-space: nowrap; }
 
+  /* Home day view: a workout and its reactions share one card */
+  .home-day-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-md); overflow: hidden;
+  }
+  .home-day-card .home-day-row { border: none; border-radius: 0; background: none; }
+  .home-day-card .home-day-row:active { background: var(--surface-2); }
+  .home-day-card .react-bar { padding: 0 14px 12px 62px; }
+  .react.is-static { cursor: default; }
+
