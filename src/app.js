@@ -435,7 +435,7 @@ import {
     REACTIONS.forEach(function (e) {
       (all[e] || []).forEach(function (uid) {
         var u = findUser(uid) || { id: uid, name: "A friend" };
-        rows.push('<div class="reactor-row">' + avatarHtml(u) +
+        rows.push('<div class="reactor-row" data-profile="' + esc(uid) + '">' + avatarHtml(u) +
           '<span class="person-name">' + esc(u.name) +
             (u.handle ? '<span class="reactor-handle">@' + esc(u.handle) + '</span>' : '') + '</span>' +
           '<span class="reactor-emoji">' + e + '</span></div>');
@@ -1262,6 +1262,13 @@ import {
   function openFromUrl(href) {
     var params = new URL(href, location.href).searchParams;
     var wid = params.get("workout");
+    var add = params.get("add");
+    if (add) {
+      pendingAdd = String(add).toLowerCase().replace(/^@/, "").replace(/[^a-z0-9_.]/g, "");
+      if (location.search) history.replaceState(null, "", location.pathname);
+      processPendingAdd();
+      return;
+    }
     if (params.get("friends")) {
       activateTab("friends");
       openFriendsManage();
@@ -1874,7 +1881,7 @@ import {
       var nth = same.length > 1 ? same.length - same.indexOf(row.wk.id) : 0;
       html += '<div class="friend-card">' +
         '<button class="friend-open" data-friend-wk="' + row.wk.id + '">' +
-          avatarHtml(row.user) +
+          '<span class="profile-tap" data-profile="' + esc(row.user.id) + '">' + avatarHtml(row.user) + '</span>' +
           '<span class="person-body">' +
             '<span class="person-name">' + esc(row.user.name) +
               (nth ? '<span class="nth-tag">#' + nth + '</span>' : '') + '</span>' +
@@ -1928,12 +1935,228 @@ import {
     return "none";
   }
 
+  /* ---------- someone's profile ---------- */
+
+  // people seen in search results, who aren't in state.users until you're friends
+  var knownPeople = {};
+
+  document.addEventListener("click", function (e) {
+    var t = e.target && e.target.closest && e.target.closest("[data-profile]");
+    if (!t) return;
+    // a face or name inside a bigger button opens the person, not the workout
+    e.preventDefault();
+    e.stopPropagation();
+    openProfileById(t.getAttribute("data-profile"));
+  }, true);
+
+  function openProfileById(id) {
+    if (id === state.me.id) { closeListSheet(); activateTab("profile"); return; }
+    var u = findUser(id) || knownPeople[id];
+    if (u) openUserProfile(u);
+  }
+
+  function profileLink(u) {
+    return location.origin + location.pathname + "?add=" + encodeURIComponent(u.handle || "");
+  }
+
+  /* The share sheet on a phone; a copied link anywhere else. */
+  function shareProfile(u) {
+    if (!u.handle) { showToast("Set a username first, in Profile."); return; }
+    var isMe = u.id === state.me.id;
+    var url = profileLink(u);
+    var text = isMe ? "Add me on GymSocial: @" + u.handle : "Add @" + u.handle + " on GymSocial";
+    if (navigator.share) {
+      navigator.share({ title: "GymSocial", text: text, url: url }).catch(function () { /* closed it */ });
+      return;
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text + " " + url).then(function () { showToast("Link copied."); },
+        function () { showToast(url); });
+    } else showToast(url);
+  }
+
+  function openUserProfile(u) {
+    var rel = relationTo(u.id);
+    var theirs = workoutsOf(u.id).slice().sort(function (a, b) {
+      return new Date(b.performedAt) - new Date(a.performedAt);
+    });
+    var weekAgo = Date.now() - 7 * 24 * 3600 * 1000;
+    var thisWeek = theirs.filter(function (w) { return new Date(w.performedAt) > weekAgo; }).length;
+
+    var action = {
+      friend:   '<span class="up-tag">&#10003; Friends</span>',
+      incoming: '<button class="btn btn-primary" data-up="accept">Accept</button>' +
+                '<button class="btn btn-ghost" data-up="decline">Decline</button>',
+      outgoing: '<button class="btn btn-ghost" data-up="cancel">Requested</button>',
+      none:     '<button class="btn btn-primary" data-up="add">Add friend</button>'
+    }[rel];
+
+    var html = '<div class="up-head">' + avatarHtml(u, "is-big") +
+        '<div class="profile-name">' + esc(u.name) + '</div>' +
+        (u.handle ? '<div class="profile-handle">@' + esc(u.handle) + '</div>' : '') +
+        '<div class="up-actions">' + action +
+          '<button class="btn btn-ghost" data-up="share">Share</button></div>' +
+      '</div>';
+
+    if (rel === "friend") {
+      html += '<div class="stat-grid up-stats">' +
+        '<div class="stat-tile"><span class="num">' + thisWeek + '</span><span class="label">This week</span></div>' +
+        '<div class="stat-tile"><span class="num">' + (theirs[0] ? esc(shortDate(theirs[0].performedAt)) : "--") +
+          '</span><span class="label">Last workout</span></div></div>';
+      html += '<div class="manage-head">Recent workouts</div>';
+      html += theirs.length ? theirs.slice(0, 12).map(function (w) {
+        var gymObj = w.gymId ? findGym(w.gymId) : null;
+        return '<button class="up-wk" data-up-wk="' + esc(w.id) + '">' +
+          '<span class="person-body"><span class="person-name">' + esc(w.title || "Workout") + '</span>' +
+          '<span class="person-sub">' + [esc(calendarDate(w.performedAt)), gymObj ? esc(gymLabel(gymObj)) : null]
+            .concat(sessionFacts(w).map(esc)).filter(Boolean).join(" &middot; ") + '</span></span>' +
+          '<span class="chevron">&rsaquo;</span></button>';
+      }).join("") : '<div class="empty-state">Nothing logged yet.</div>';
+    } else {
+      html += '<p class="up-locked">' + (rel === "outgoing"
+        ? "Once @" + esc(u.handle) + " accepts, their workouts show up here and in your feed."
+        : "Add @" + esc(u.handle) + " as a friend to see their workouts.") + '</p>';
+    }
+
+    var el = openListSheet("Profile", html);
+    var after = function (msg) {
+      return function () {
+        if (msg) showToast(msg);
+        renderFriends(); renderHome();
+        openUserProfile(findUser(u.id) || u);
+      };
+    };
+    var fail = function (err) { showToast((err && err.message) || "That didn't go through. Try again."); };
+    el.querySelectorAll("[data-up]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var k = btn.getAttribute("data-up");
+        if (k === "share") { shareProfile(u); return; }
+        btn.disabled = true;
+        if (k === "add") sendFriendRequest(u.id).then(after("Request sent to " + u.name + ".")).catch(fail);
+        else if (k === "accept") acceptFriendRequest(u.id).then(after("You and " + u.name + " are friends.")).catch(fail);
+        else if (k === "decline") declineFriendRequest(u.id).then(after(null)).catch(fail);
+        else if (k === "cancel") cancelFriendRequest(u.id).then(after("Request canceled.")).catch(fail);
+      });
+    });
+    el.querySelectorAll("[data-up-wk]").forEach(function (b) {
+      b.addEventListener("click", function () { openWorkoutDetail(b.getAttribute("data-up-wk")); });
+    });
+  }
+
+  /* ---------- a shared profile link: ?add=<username> ---------- */
+  var pendingAdd = null;
+  var authResolved = false;     // has Supabase said whether we're signed in yet?
+  var addPromptShown = false;
+
+  function processPendingAdd() {
+    if (!pendingAdd) return;
+    if (!cloudEnabled()) { pendingAdd = null; return; }
+    if (!currentUser()) {
+      if (authResolved && !addPromptShown) {
+        addPromptShown = true;
+        openAuth("signin");
+        authNote("Sign in or create an account to add @" + pendingAdd + ".", true);
+      }
+      return;
+    }
+    var handle = pendingAdd;
+    pendingAdd = null;
+    searchPeople(handle).then(function (list) {
+      var u = list.filter(function (x) { return x.handle === handle; })[0];
+      if (!u) {
+        if (state.me.handle === handle) showToast("That's your own profile link.");
+        else showToast("Couldn't find @" + handle + ".");
+        return;
+      }
+      knownPeople[u.id] = u;
+      activateTab("friends");
+      openUserProfile(findUser(u.id) || u);
+    }).catch(function () { showToast("Couldn't open @" + handle + " right now."); });
+  }
+
+  /* ---------- reuse a workout ---------- */
+
+  /* Starts today's workout as a copy: same exercises and equipment, every
+     set filled in (lighter, like a suggestion) with that workout's numbers.
+     A friend's exercises are matched to yours by name. */
+  function startReuse(wk) {
+    var go = function () {
+      var mine = wk.userId === state.me.id;
+      resetDraft();
+      draft.title = wk.title || "";
+      // into the box now: rendering the log saves the draft from what's on screen
+      document.getElementById("log-title").value = draft.title;
+      if (wk.gymId && state.gyms.some(function (g) { return g.id === wk.gymId; })) draft.gymId = wk.gymId;
+      draft.exercises = wk.exercises.map(function (blk) {
+        var ex = findExercise(blk.exerciseId);
+        var exId = blk.exerciseId;
+        var equip = blk.equipment || null;
+        var own = mine && state.exercises.some(function (e) { return e.id === exId; }) && !retiredExercise(exId);
+        if (!own) {
+          if (!ex) return null;
+          var parsed = parseExerciseName(ex.name);
+          exId = findOrCreateExercise(parsed ? parsed.base : ex.name).id;
+          if (!equip && parsed) equip = parsed.equipment;
+        }
+        if (equip) ensureEquipment(equip);
+        var out = {
+          exerciseId: exId, metric: metricOf(blk), equipment: equip,
+          sets: blk.sets.map(function (st) {
+            return { reps: st.reps == null ? null : st.reps, seconds: st.seconds == null ? null : st.seconds,
+              weight: st.weight == null ? null : st.weight, distance: st.distance == null ? null : st.distance,
+              unit: st.unit || "lb", distUnit: st.distUnit || "mi", prefill: true };
+          })
+        };
+        if (blk.superset) out.superset = blk.superset;
+        return out;
+      }).filter(Boolean);
+      persist();
+      closeListSheet();
+      activateTab("log");
+      renderLog();
+      showToast("Reusing \u201c" + (wk.title || "Workout") + "\u201d \u2014 type over any number to change it.");
+    };
+    saveDraft();
+    if (draft.exercises && draft.exercises.length) { closeListSheet(); openDraftChoice("today", go); return; }
+    go();
+  }
+
+  function openReusePicker() {
+    var list = myWorkouts().slice().sort(function (a, b) {
+      return new Date(b.performedAt) - new Date(a.performedAt);
+    }).slice(0, 25);
+    var el = openListSheet("Reuse a workout", list.map(function (w) {
+      var n = w.exercises.length;
+      return '<button class="up-wk" data-reuse="' + esc(w.id) + '">' +
+        '<span class="person-body"><span class="person-name">' + esc(w.title || "Workout") + '</span>' +
+        '<span class="person-sub">' + esc(calendarDate(w.performedAt)) + ' &middot; ' + n +
+          (n === 1 ? " exercise" : " exercises") + '</span></span>' +
+        '<span class="chevron">&rsaquo;</span></button>';
+    }).join("") || '<div class="empty-state">Nothing logged yet.</div>');
+    el.querySelectorAll("[data-reuse]").forEach(function (b) {
+      b.addEventListener("click", function () {
+        var wk = state.workouts.filter(function (w) { return w.id === b.getAttribute("data-reuse"); })[0];
+        if (!wk) return;
+        openConfirm({
+          title: "Reuse \u201c" + (wk.title || "Workout") + "\u201d?",
+          body: "Starts today's workout with the same exercises, filled in with the numbers from " +
+            calendarDate(wk.performedAt) + ".",
+          confirmLabel: "Reuse", danger: false,
+          onConfirm: function () { startReuse(wk); }
+        });
+      });
+    });
+  }
+
   function personRowHtml(u, actions) {
+    knownPeople[u.id] = u;
     return '<div class="manage-row">' +
-      avatarHtml(u) +
-      '<span class="person-body">' +
-        '<span class="person-name">' + esc(u.name) + '</span>' +
-        '<span class="person-sub">@' + esc(u.handle || "") + '</span>' +
+      '<span class="profile-tap person-tap" data-profile="' + esc(u.id) + '">' +
+        avatarHtml(u) +
+        '<span class="person-body">' +
+          '<span class="person-name">' + esc(u.name) + '</span>' +
+          '<span class="person-sub">@' + esc(u.handle || "") + '</span>' +
+        '</span>' +
       '</span>' +
       '<span class="manage-acts">' + actions + '</span>' +
     '</div>';
@@ -2123,8 +2346,8 @@ import {
     var html =
       '<div class="detail-head">' +
         (who
-          ? '<div class="detail-who">' + avatarHtml(who) +
-            '<span>' + esc(who.name) + '</span></div>'
+          ? '<div class="detail-who" data-profile="' + esc(who.id) + '">' + avatarHtml(who) +
+            '<span>' + esc(who.name) + '</span><span class="chevron">&rsaquo;</span></div>'
           : '') +
         '<div class="detail-title">' + esc(wk.title || "Workout") + '</div>' +
         '<div class="detail-when">' + calendarDate(wk.performedAt) + ' &middot; ' +
@@ -2171,8 +2394,11 @@ import {
     } else {
       html += '<div class="detail-react">' + reactionBarHtml(wk) + '</div>';
     }
+    html += '<button class="btn btn-ghost btn-block" id="detail-reuse" style="margin-top:' + (mine ? 8 : 16) + 'px;">' +
+      (mine ? "Reuse this workout" : "Do this workout") + '</button>';
 
     var el = openListSheet("Workout", html);
+    el.querySelector("#detail-reuse").addEventListener("click", function () { startReuse(wk); });
     if (mine) {
       el.querySelector("#detail-edit").addEventListener("click", function () {
         closeListSheet();
@@ -3208,7 +3434,11 @@ import {
     }).filter(function (blk) { return blk.sets.length > 0; });
   }
 
+  document.getElementById("reuse-btn").addEventListener("click", openReusePicker);
+
   function renderLog() {
+    document.getElementById("reuse-btn").hidden =
+      !myWorkouts().length || !!(draft.exercises && draft.exercises.length);
     document.getElementById("log-gym").innerHTML = gymOptionsHtml(draft.gymId);
     document.getElementById("log-date").value = draft.date;
     document.getElementById("log-start").value = draft.startTime;
@@ -4071,7 +4301,8 @@ import {
     var row = function (user, who, wk, extra) {
       var gymObj = wk.gymId ? findGym(wk.gymId) : null;
       return '<button class="home-day-row" data-day-workout="' + wk.id + '">' +
-        avatarHtml(user) +
+        (user.id === state.me.id ? avatarHtml(user)
+          : '<span class="profile-tap" data-profile="' + esc(user.id) + '">' + avatarHtml(user) + '</span>') +
         '<span class="person-body">' +
           '<span class="person-name">' + esc(who) + ' <span class="home-day-title">' +
             esc(wk.title || "Workout") + '</span></span>' +
@@ -4184,6 +4415,7 @@ import {
         (me.avatar ? '<button class="btn btn-ghost" id="drop-photo">Remove</button>' : '') +
         '<button class="btn btn-ghost" id="rename-me">Rename</button>' +
         (currentUser() ? '<button class="btn btn-ghost" id="set-username">Username</button>' : '') +
+        (currentUser() && me.handle ? '<button class="btn btn-primary" id="share-me">Share profile</button>' : '') +
       '</div>';
 
     document.getElementById("profile-alltime").innerHTML = [
@@ -4207,6 +4439,8 @@ import {
       });
     }
     document.getElementById("rename-me").addEventListener("click", openRename);
+    var shareBtn = document.getElementById("share-me");
+    if (shareBtn) shareBtn.addEventListener("click", function () { shareProfile(state.me); });
     var unameBtn = document.getElementById("set-username");
     if (unameBtn) unameBtn.addEventListener("click", openUsername);
 
@@ -4497,7 +4731,7 @@ import {
      redraw whatever is on screen -- except mid-edit, where it would wipe
      what you're typing. */
   var wasAuthed = false;
-  if (/[?&](workout|friends)=/.test(location.search)) setTimeout(function () { openFromUrl(location.href); }, 0);
+  if (/[?&](workout|friends|add)=/.test(location.search)) setTimeout(function () { openFromUrl(location.href); }, 0);
 
   startSync({
     getState: function () { return state; },
@@ -4513,6 +4747,8 @@ import {
       activateTab(currentTab);
     },
     onStatus: function () {
+      authResolved = true;
+      processPendingAdd();
       var authed = !!currentUser();
       if (authed !== wasAuthed) {
         wasAuthed = authed;
