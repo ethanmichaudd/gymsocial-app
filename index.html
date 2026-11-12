@@ -43,6 +43,10 @@
         <div><h1>Log Workout</h1><p>Check in, add what you trained, save it.</p></div>
         <button class="modal-close is-link log-cancel" id="log-cancel">Cancel</button>
       </div>
+      <div class="segmented log-kind" id="log-kind">
+        <button class="seg-btn selected" data-kind="lift">Lift</button>
+        <button class="seg-btn" data-kind="cardio">Cardio</button>
+      </div>
       <button class="btn btn-ghost btn-block reuse-link" id="reuse-btn" hidden>&#8635; Start from a past workout</button>
 
       <div class="field">
@@ -84,6 +88,7 @@
 
       <div id="exercise-blocks"></div>
       <button class="add-exercise-btn" id="add-exercise-btn">+ Add Exercise</button>
+      <button class="btn btn-ghost btn-block add-cardio-btn" id="add-cardio-btn">+ Add Cardio</button>
 
       <button class="btn btn-primary btn-block" id="save-workout-btn">Save Workout</button>
     </section>

@@ -25,8 +25,104 @@ import {
   var METRICS = {
     reps:     { label: "Reps",     col1: "Reps",  col2: "Weight",   unitKey: "unit",     units: ["lb", "kg"] },
     time:     { label: "Time",     col1: "Time",  col2: "Weight",   unitKey: "unit",     units: ["lb", "kg"] },
-    distance: { label: "Distance", col1: "Time",  col2: "Distance", unitKey: "distUnit", units: ["mi", "km"] }
+    distance: { label: "Distance", col1: "Time",  col2: "Distance", unitKey: "distUnit", units: ["mi", "km"] },
+    // a run, a ride, a row: one entry with its own fields (see CARDIO below)
+    cardio:   { label: "Cardio",   col1: "Time",  col2: "Distance", unitKey: "distUnit", units: ["mi", "km", "m"] }
   };
+
+  /* ---- cardio: what each activity asks for ----
+     dist: the units its distance can be in (null = no distance at all)
+     rate: what's worked out from time + distance -- pace (min per mile),
+           speed (mph) or split (per 500m, for rowing)
+     intensity: the machine setting worth writing down, if any */
+  var CARDIO_BUILTIN = ["Run", "Walk", "Hike", "Bike", "Spin", "Row", "Elliptical", "Stair Climber"];
+  var CARDIO_PROFILES = {
+    "Run":           { icon: "\uD83C\uDFC3", dist: ["mi", "km"], rate: "pace",  intensity: "Incline %",  steps: true },
+    "Walk":          { icon: "\uD83D\uDEB6", dist: ["mi", "km"], rate: "pace",  intensity: "Incline %",  steps: true },
+    "Hike":          { icon: "\uD83E\uDD7E", dist: ["mi", "km"], rate: "pace",  intensity: null,         steps: true },
+    "Bike":          { icon: "\uD83D\uDEB4", dist: ["mi", "km"], rate: "speed", intensity: "Resistance", steps: false },
+    "Spin":          { icon: "\uD83D\uDEB4", dist: ["mi", "km"], rate: "speed", intensity: "Resistance", steps: false },
+    "Row":           { icon: "\uD83D\uDEA3", dist: ["m"],        rate: "split", intensity: "Damper",     steps: false },
+    "Elliptical":    { icon: "\u26A1",       dist: ["mi", "km"], rate: null,    intensity: "Level",      steps: true },
+    "Stair Climber": { icon: "\uD83E\uDE9C", dist: null,         rate: null,    intensity: "Level",      steps: true }
+  };
+  var CARDIO_GENERIC = { icon: "\u26A1", dist: ["mi", "km"], rate: null, intensity: "Level", steps: true };
+
+  function activityProfile(name) {
+    return CARDIO_PROFILES[name] || CARDIO_GENERIC;
+  }
+
+  function pad2(n) { return (n < 10 ? "0" : "") + n; }
+
+  // 8:13 /mi, 7.3 mph, 2:05 /500m -- or "" when there isn't enough to say
+  function cardioRate(st, profile) {
+    if (!st || !st.seconds || !st.distance || !profile.rate) return "";
+    var unit = st.distUnit || (profile.dist && profile.dist[0]) || "mi";
+    if (profile.rate === "speed") {
+      var v = st.distance / (st.seconds / 3600);
+      return (Math.round(v * 10) / 10) + (unit === "km" ? " km/h" : " mph");
+    }
+    var per = profile.rate === "split" ? st.seconds / (st.distance / 500) : st.seconds / st.distance;
+    per = Math.round(per);
+    return Math.floor(per / 60) + ":" + pad2(per % 60) + (profile.rate === "split" ? " /500m" : " /" + unit);
+  }
+
+  function cardioDistanceText(st) {
+    if (st.distance == null) return "";
+    var unit = st.distUnit || "mi";
+    return (unit === "m" ? Math.round(st.distance).toLocaleString() : Math.round(st.distance * 100) / 100) + " " + unit;
+  }
+
+  // "3.1 mi · 25:30 · 8:13 /mi", with the extras when asked for
+  function cardioSummary(st, name, full) {
+    if (!st) return "";
+    var prof = activityProfile(name);
+    var parts = [cardioDistanceText(st), st.seconds ? formatDuration(st.seconds) : "", cardioRate(st, prof)];
+    if (full) {
+      if (st.intensity != null && prof.intensity) parts.push(prof.intensity.replace(" %", "") + " " + st.intensity + (prof.intensity.indexOf("%") !== -1 ? "%" : ""));
+      if (st.heartRate != null) parts.push(st.heartRate + " bpm");
+      if (st.steps != null) parts.push(Number(st.steps).toLocaleString() + " steps");
+    }
+    return parts.filter(Boolean).join(" \u00b7 ") || "\u2014";
+  }
+
+  /* A cardio post's headline numbers: distance, time, pace, then whatever
+     else was recorded. */
+  function cardioTiles(wk) {
+    var blk = wk.exercises[0], st = blk.sets[0] || {};
+    var ex = findExercise(blk.exerciseId);
+    var prof = activityProfile(ex ? ex.name : "");
+    var t = [];
+    if (st.distance != null) t.push({ value: cardioDistanceText(st).split(" ")[0], label: "Distance " + (st.distUnit || "mi") });
+    var secs = st.seconds || durationOf(wk);
+    if (secs) t.push({ value: formatDuration(secs), label: "Time" });
+    var rate = cardioRate(st, prof);
+    if (rate) {
+      var bits = rate.split(" ");
+      t.push({ value: bits[0], label: ({ pace: "Pace ", speed: "Speed ", split: "Split " }[prof.rate]) + bits.slice(1).join(" ") });
+    }
+    if (st.heartRate != null) t.push({ value: st.heartRate, label: "Avg bpm" });
+    if (st.steps != null) t.push({ value: Number(st.steps).toLocaleString(), label: "Steps" });
+    if (st.intensity != null && prof.intensity) t.push({ value: st.intensity, label: prof.intensity });
+    if (wk.calories != null) t.push({ value: wk.calories, label: "Calories" });
+    return t;
+  }
+
+  function isCardioWorkout(wk) {
+    return !!(wk && wk.exercises && wk.exercises.length &&
+      wk.exercises.every(function (b) { return b.metric === "cardio"; }));
+  }
+
+  function cardioIconFor(wk) {
+    var ex = wk && wk.exercises[0] && findExercise(wk.exercises[0].exerciseId);
+    return activityProfile(ex ? ex.name : "").icon;
+  }
+
+  // a cardio post reads "🏃 Run" in lists
+  function workoutTitleHtml(wk) {
+    var t = esc(wk.title || "Workout");
+    return isCardioWorkout(wk) ? '<span class="cardio-icon">' + cardioIconFor(wk) + '</span> ' + t : t;
+  }
 
   /* What the movement was loaded with. Chosen per exercise in a session, so
      "Bench, dumbbell" and "Bench, barbell" stay distinguishable without being
@@ -138,10 +234,11 @@ import {
     return total > 0 ? total : null;
   }
 
-  function usesDuration(metric) { return metric === "time" || metric === "distance"; }
+  function usesDuration(metric) { return metric === "time" || metric === "distance" || metric === "cardio"; }
 
   /* The number a set is judged by, in its own mode. */
   function setValue(s, metric) {
+    if (metric === "cardio") return s.distance != null ? s.distance : s.seconds;
     if (metric === "distance") return s.distance;
     if (metric === "time") return s.seconds;
     return s.weight;
@@ -158,6 +255,10 @@ import {
   }
 
   function unitFor(sets, metric) {
+    if (metric === "cardio") {
+      var d = sets.filter(function (s) { return s.distance != null; })[0];
+      return d ? (d.distUnit || "mi") : "";
+    }
     var key = METRICS[metric].unitKey;
     var withUnit = sets.filter(function (s) { return s[key]; })[0];
     return withUnit ? withUnit[key] : METRICS[metric].units[0];
@@ -165,6 +266,7 @@ import {
 
   function formatValue(v, metric, unit) {
     if (v == null) return "";
+    if (metric === "cardio") return unit ? (Math.round(v * 100) / 100) + " " + unit : formatDuration(v);
     if (metric === "time") return formatDuration(v);
     if (metric === "distance") return v + " " + unit;
     return v + unit;
@@ -190,7 +292,7 @@ import {
     "Bench Press", "Incline Press", "Back Squat", "Deadlift",
     "Romanian Deadlift", "Overhead Press", "Pull-Up", "Bent-Over Row",
     "Bicep Curl", "Tricep Pushdown", "Lateral Raise", "Lat Pulldown",
-    "Leg Press", "Plank", "Treadmill Run"
+    "Leg Press", "Plank"
   ];
 
   var DEFAULT_EQUIPMENT = {
@@ -666,8 +768,9 @@ import {
   }
 
   /* "3x8 @ 135lb", "3x45s", "2.0 mi in 18:30" -- collapses identical sets. */
-  function summarizeSets(sets, metric, equipment) {
+  function summarizeSets(sets, metric, equipment, name) {
     metric = metric || "reps";
+    if (metric === "cardio") return cardioSummary(sets[0], name, true);
     var cfg = METRICS[metric], unitKey = cfg.unitKey;
     var wSuffix = metric === "distance" ? ""
       : WEIGHT_MODES[weightMode(equipment)].suffix;
@@ -722,10 +825,13 @@ import {
   function sessionDistance(exerciseBlocks) {
     var out = { mi: 0, km: 0 };
     exerciseBlocks.forEach(function (blk) {
-      if (metricOf(blk) !== "distance") return;
+      var m = metricOf(blk);
+      if (m !== "distance" && m !== "cardio") return;
       blk.sets.forEach(function (s) {
         if (s.distance == null) return;
-        out[s.distUnit === "km" ? "km" : "mi"] += s.distance;
+        if (s.distUnit === "km") out.km += s.distance;
+        else if (s.distUnit === "m") out.km += s.distance / 1000;
+        else out.mi += s.distance;
       });
     });
     return out;
@@ -739,6 +845,7 @@ import {
     var prs = [];
     exerciseBlocks.forEach(function (blk) {
       var metric = metricOf(blk);
+      if (metric === "cardio") return;      // a run isn't a lift record
       var now = bestValueIn(blk.sets, metric);
       if (now === null) return;
       var unit = unitFor(blk.sets, metric);
@@ -914,6 +1021,8 @@ import {
   }
 
   var FRIENDS_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8.5" r="3.2"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0"/><path d="M16 5.6a3.2 3.2 0 0 1 0 5.8"/><path d="M17.5 14.2a5.5 5.5 0 0 1 3 4.8"/></svg>';
+  // a heartbeat line: marks a cardio day on the calendar, where lifting gets a flame
+  var CARDIO_MARK_SVG = '<svg class="cal-flame cal-cardio" viewBox="0 0 24 24" fill="none" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12h4l3-7 4 14 3-7h6"/></svg>';
   var FLAME_SVG = '<svg class="streak-flame" viewBox="0 0 24 24"><path d="M12.5 2c.4 3-1.3 4.6-2.7 6C8.2 9.5 7 11 7 13.4A5.6 5.6 0 0 0 12.6 19a5.4 5.4 0 0 0 5.4-5.5c0-3.4-2.3-5-3.4-7.3-.4.9-1 1.5-1.7 2 .4-2.2-.1-4.6-.4-6.2Z"/></svg>';
 
   function streakUnit(mode) {
@@ -1594,7 +1703,9 @@ import {
           '<span>' + day + '</span>' +
           (dayWorkouts.length
             ? '<span class="cal-marks' + (dayWorkouts.length > 1 ? " is-multi" : "") + '">' +
-                new Array(Math.min(dayWorkouts.length, 3) + 1).join(FLAME_SVG.replace("streak-flame", "cal-flame")) +
+                dayWorkouts.slice(0, 3).map(function (w) {
+                  return isCardioWorkout(w) ? CARDIO_MARK_SVG : FLAME_SVG.replace("streak-flame", "cal-flame");
+                }).join("") +
               '</span>'
             : "") +
         "</" + tag + ">";
@@ -1750,6 +1861,7 @@ import {
     if (workout.calories != null) {
       tiles.push({ value: workout.calories, label: "Calories", count: true });
     }
+    if (isCardioWorkout(workout)) tiles = cardioTiles(workout);
     // Keep the grid tidy; anything past four is mentioned underneath instead.
     var overflow = tiles.slice(4).map(function (t) { return t.value + " " + t.label.toLowerCase(); });
     tiles = tiles.slice(0, 4);
@@ -1885,7 +1997,7 @@ import {
           '<span class="person-body">' +
             '<span class="person-name">' + esc(row.user.name) +
               (nth ? '<span class="nth-tag">#' + nth + '</span>' : '') + '</span>' +
-            '<span class="friend-what">' + esc(row.wk.title || "Workout") + '</span>' +
+            '<span class="friend-what">' + workoutTitleHtml(row.wk) + '</span>' +
             '<span class="person-sub">' +
               [esc(formatTime(row.wk.performedAt)),
                exCount + (exCount === 1 ? " exercise" : " exercises")]
@@ -2083,6 +2195,7 @@ import {
     var go = function () {
       var mine = wk.userId === state.me.id;
       resetDraft();
+      draft.kind = isCardioWorkout(wk) ? "cardio" : "lift";
       draft.title = wk.title || "";
       // into the box now: rendering the log saves the draft from what's on screen
       document.getElementById("log-title").value = draft.title;
@@ -2092,7 +2205,11 @@ import {
         var exId = blk.exerciseId;
         var equip = blk.equipment || null;
         var own = mine && state.exercises.some(function (e) { return e.id === exId; }) && !retiredExercise(exId);
-        if (!own) {
+        if (blk.metric === "cardio") {
+          // a friend's run becomes your Run
+          if (!own) { if (!ex) return null; exId = ensureActivity(ex.name).id; }
+          equip = null;
+        } else if (!own) {
           if (!ex) return null;
           var parsed = parseExerciseName(ex.name);
           exId = findOrCreateExercise(parsed ? parsed.base : ex.name).id;
@@ -2104,7 +2221,10 @@ import {
           sets: blk.sets.map(function (st) {
             return { reps: st.reps == null ? null : st.reps, seconds: st.seconds == null ? null : st.seconds,
               weight: st.weight == null ? null : st.weight, distance: st.distance == null ? null : st.distance,
-              unit: st.unit || "lb", distUnit: st.distUnit || "mi", prefill: true };
+              unit: st.unit || "lb", distUnit: st.distUnit || "mi",
+              intensity: st.intensity == null ? null : st.intensity,
+              heartRate: st.heartRate == null ? null : st.heartRate,
+              steps: st.steps == null ? null : st.steps, prefill: true };
           })
         };
         if (blk.superset) out.superset = blk.superset;
@@ -2338,6 +2458,7 @@ import {
     else if (vol.lb) tiles.push({ value: Math.round(vol.lb).toLocaleString(), label: "Volume lb" });
     else if (vol.kg) tiles.push({ value: Math.round(vol.kg).toLocaleString(), label: "Volume kg" });
     if (wk.calories != null) tiles.push({ value: wk.calories, label: "Calories" });
+    if (isCardioWorkout(wk)) tiles = cardioTiles(wk);
     tiles = tiles.slice(0, 4);
 
     var ssLabels = supersetLabels(wk.exercises);
@@ -2349,7 +2470,7 @@ import {
           ? '<div class="detail-who" data-profile="' + esc(who.id) + '">' + avatarHtml(who) +
             '<span>' + esc(who.name) + '</span><span class="chevron">&rsaquo;</span></div>'
           : '') +
-        '<div class="detail-title">' + esc(wk.title || "Workout") + '</div>' +
+        '<div class="detail-title">' + workoutTitleHtml(wk) + '</div>' +
         '<div class="detail-when">' + calendarDate(wk.performedAt) + ' &middot; ' +
           esc(formatTime(wk.performedAt)) +
           (wk.endedAt ? ' &ndash; ' + esc(formatTime(wk.endedAt)) : '') + '</div>' +
@@ -2383,7 +2504,7 @@ import {
           (blk.equipment ? '<span class="detail-ex-eq">' + esc(blk.equipment) + '</span>' : '') +
         '</div>' +
         '<div class="detail-ex-sets num">' +
-          esc(summarizeSets(blk.sets, metricOf(blk), blk.equipment)) + '</div>' +
+          esc(summarizeSets(blk.sets, metricOf(blk), blk.equipment, exObj && exObj.name)) + '</div>' +
         (blk.note ? '<div class="detail-ex-note">' + esc(blk.note) + '</div>' : '') +
       '</div>';
     }).join("");
@@ -2675,6 +2796,11 @@ import {
 
     var sets = repSetCount(wk.exercises);
     if (sets) facts.push(sets + (sets === 1 ? " set" : " sets"));
+    if (isCardioWorkout(wk) && wk.exercises.length === 1) {
+      var ex0 = findExercise(wk.exercises[0].exerciseId);
+      var rate = cardioRate(wk.exercises[0].sets[0], activityProfile(ex0 ? ex0.name : ""));
+      if (rate) facts.push(rate);
+    }
     return facts;
   }
 
@@ -2884,6 +3010,8 @@ import {
 
   function freshDraft() {
     return {
+      kind: "lift",          // "cardio" = one activity, posted on its own
+      stash: null,           // the other mode's entries, kept while you flip
       gymId: state.gyms[0] ? state.gyms[0].id : "",
       date: dateInputValue(new Date().toISOString()),
       startTime: timeInputValue(new Date().toISOString()),
@@ -2920,8 +3048,18 @@ import {
   /* The title and calories live in plain inputs rather than on the draft,
      so they are read in at save time -- otherwise a restore brings back the
      sets but not what you called the session. */
+  /* An untouched cardio form isn't "a workout in progress" -- only what you
+     typed is. Lift exercises count as soon as they're added. */
   function draftHasContent(d) {
-    return (d.exercises && d.exercises.length) || d.title || d.calories || d.photoData;
+    var typed = (d.exercises || []).some(function (b) {
+      if (b.metric !== "cardio") return true;
+      if (b.note) return true;
+      return b.sets.some(function (st) {
+        return !st.prefill && (st.seconds != null || st.distance != null || st.steps != null ||
+          st.heartRate != null || st.intensity != null);
+      });
+    });
+    return typed || d.title || d.calories || d.photoData;
   }
 
   function saveDraft() {
@@ -2944,6 +3082,8 @@ import {
     if (!saved || !Array.isArray(saved.exercises)) return false;
     if (!draftHasContent(saved)) return false;   // nothing worth restoring
     draft = {
+      kind: saved.kind === "cardio" ? "cardio" : "lift",
+      stash: Array.isArray(saved.stash) ? saved.stash : null,
       title: saved.title || "",
       calories: saved.calories || "",
       gymId: saved.gymId || "",
@@ -3008,6 +3148,173 @@ import {
     });
   }
 
+  /* One activity: what it was, then its numbers. On a Cardio post the
+     activity rail is the header; as a finisher inside a lift it has a name
+     and a Remove like any exercise. */
+  function cardioBlockHtml(blk, i, exObj, standalone, excludeWorkoutId) {
+    var name = exObj ? exObj.name : "Cardio";
+    var prof = activityProfile(name);
+    if (!blk.sets.length) blk.sets.push(blankCardioSet(prof));
+    var st = blk.sets[0];
+    if (prof.dist && prof.dist.indexOf(st.distUnit) === -1) st.distUnit = prof.dist[0];
+    var pf = st.prefill ? " is-prefill" : "";
+    var p = splitDuration(st.seconds);
+    var val = function (v) { return v == null ? "" : esc(v); };
+
+    var last = lastSessionFor(blk.exerciseId, excludeWorkoutId);
+    var lastLine = last
+      ? '<div class="last-time">Last time <strong>' + esc(cardioSummary(last.block.sets[0], name)) +
+          '</strong> &middot; ' + shortDate(last.workout.performedAt) + '</div>'
+      : '<div class="last-time is-new">First time logging this</div>';
+
+    var rail = '<div class="equip-scroll activity-scroll">' + activityList().map(function (a) {
+        return '<button class="equip-btn activity-btn' + (a === name ? " selected" : "") +
+          '" data-activity="' + i + ':' + esc(a) + '">' + activityProfile(a).icon + ' ' + esc(a) + '</button>';
+      }).join("") +
+      '<button class="equip-btn is-add" data-activity-add="' + i + '">+ Add</button></div>';
+
+    var field = function (label, inner) {
+      return '<label class="cf"><span class="cf-label">' + label + '</span>' + inner + '</label>';
+    };
+    var grid = field("Time",
+        '<span class="dur-group">' +
+          '<input type="number" inputmode="numeric" class="c-h' + pf + '" placeholder="h" value="' + esc(p.h) + '">' +
+          '<input type="number" inputmode="numeric" class="c-m' + pf + '" placeholder="m" value="' + esc(p.m) + '">' +
+          '<input type="number" inputmode="numeric" class="c-s' + pf + '" placeholder="s" value="' + esc(p.s) + '">' +
+        '</span>');
+    if (prof.dist) {
+      grid += field("Distance",
+        '<span class="cf-row"><input type="number" inputmode="decimal" class="c-dist' + pf + '" placeholder="0" value="' + val(st.distance) + '">' +
+        (prof.dist.length > 1
+          ? '<button type="button" class="unit-toggle" data-cardio-unit>' + esc(st.distUnit) + '</button>'
+          : '<span class="cf-unit">' + esc(prof.dist[0]) + '</span>') + '</span>');
+    }
+    if (prof.rate) {
+      grid += '<div class="cf cf-rate"><span class="cf-label">' +
+        { pace: "Pace", speed: "Speed", split: "Split" }[prof.rate] + '</span>' +
+        '<span class="cf-rate-val" data-cardio-rate>' + (esc(cardioRate(st, prof)) || "&mdash;") + '</span></div>';
+    }
+    if (prof.intensity) {
+      grid += field(esc(prof.intensity), '<input type="number" inputmode="decimal" class="c-int' + pf + '" placeholder="0" value="' + val(st.intensity) + '">');
+    }
+    grid += field("Avg heart rate", '<input type="number" inputmode="numeric" class="c-hr' + pf + '" placeholder="bpm" value="' + val(st.heartRate) + '">');
+    if (prof.steps) {
+      grid += field("Steps", '<input type="number" inputmode="numeric" class="c-steps' + pf + '" placeholder="0" value="' + val(st.steps) + '">');
+    }
+
+    return '<div class="exercise-block is-cardio" data-cardio-block="' + i + '">' +
+      (standalone ? '' :
+        '<div class="exercise-block-head"><h3 class="ex-name">' + prof.icon + ' ' + esc(name) + '</h3>' +
+          '<button class="btn-danger-text" data-remove-ex="' + i + '">Remove</button></div>') +
+      rail + lastLine +
+      '<div class="cardio-grid">' + grid + '</div>' +
+      '<textarea class="note-input" rows="2" data-note="' + i + '" placeholder="Notes: how it felt, the route, the weather...">' +
+        esc(blk.note || "") + '</textarea>' +
+    '</div>';
+  }
+
+  function wireCardioBlocks(containerEl, draftObj, rerender, excludeWorkoutId) {
+    containerEl.querySelectorAll("[data-cardio-block]").forEach(function (el) {
+      var blk = draftObj.exercises[Number(el.getAttribute("data-cardio-block"))];
+      var st = blk.sets[0];
+      var exObj = findExercise(blk.exerciseId);
+      var prof = activityProfile(exObj ? exObj.name : "");
+      var q = function (c) { return el.querySelector(c); };
+      var num = function (input) { return input && input.value !== "" ? Number(input.value) : null; };
+      var rateEl = el.querySelector("[data-cardio-rate]");
+      var read = function () {
+        st.seconds = joinDuration(q(".c-h").value, q(".c-m").value, q(".c-s").value);
+        if (q(".c-dist")) st.distance = num(q(".c-dist"));
+        if (q(".c-int")) st.intensity = num(q(".c-int"));
+        st.heartRate = num(q(".c-hr"));
+        if (q(".c-steps")) st.steps = num(q(".c-steps"));
+        if (rateEl) rateEl.textContent = cardioRate(st, prof) || "\u2014";
+      };
+      el.querySelector(".cardio-grid").addEventListener("input", function () {
+        if (st.prefill) {
+          delete st.prefill;
+          el.querySelectorAll(".is-prefill").forEach(function (x) { x.classList.remove("is-prefill"); });
+        }
+        read();
+      });
+      // 90 in the seconds box becomes 1m 30s when you leave it
+      [".c-h", ".c-m", ".c-s"].forEach(function (c) {
+        q(c).addEventListener("change", function () {
+          var p = splitDuration(st.seconds);
+          q(".c-h").value = p.h; q(".c-m").value = p.m; q(".c-s").value = p.s;
+        });
+      });
+      var unitBtn = el.querySelector("[data-cardio-unit]");
+      if (unitBtn) unitBtn.addEventListener("click", function () {
+        var units = prof.dist;
+        st.distUnit = units[(units.indexOf(st.distUnit) + 1) % units.length];
+        unitBtn.textContent = st.distUnit;
+        if (rateEl) rateEl.textContent = cardioRate(st, prof) || "\u2014";
+      });
+    });
+
+    containerEl.querySelectorAll("[data-activity]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var raw = btn.getAttribute("data-activity");
+        var cut = raw.indexOf(":");
+        var i = Number(raw.slice(0, cut));
+        var act = ensureActivity(raw.slice(cut + 1));
+        var keep = draftObj.exercises[i].note;
+        draftObj.exercises[i] = cardioBlockFor(act, excludeWorkoutId);
+        if (keep) draftObj.exercises[i].note = keep;
+        persist();
+        rerender();
+      });
+    });
+    containerEl.querySelectorAll("[data-activity-add]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var i = Number(btn.getAttribute("data-activity-add"));
+        openAddActivity(function (act) {
+          draftObj.exercises[i] = cardioBlockFor(act, excludeWorkoutId);
+          rerender();
+        });
+      });
+    });
+  }
+
+  function openAddActivity(done) {
+    var el = openListSheet("Add an activity",
+      '<input type="text" id="activity-new" placeholder="e.g. Jump Rope, Ski Erg, Swim" autocomplete="off">' +
+      '<p class="setting-help">Gets time, distance, level, heart rate, steps and notes.</p>' +
+      '<button class="btn btn-primary btn-block" id="activity-save">Add</button>');
+    var input = el.querySelector("#activity-new");
+    input.focus();
+    el.querySelector("#activity-save").addEventListener("click", function () {
+      var name = titleCase(input.value);
+      if (!name) { showToast("Give it a name."); return; }
+      var act = ensureActivity(name);
+      persist();
+      closeListSheet();
+      done(act);
+    });
+  }
+
+  /* Lift only: a cardio finisher, picked from the same activities. */
+  function openCardioPicker(done) {
+    var el = openListSheet("Add cardio", '<div class="activity-grid">' + activityList().map(function (a) {
+        return '<button class="activity-pick" data-pick-activity="' + esc(a) + '">' +
+          '<span class="activity-pick-icon">' + activityProfile(a).icon + '</span>' + esc(a) + '</button>';
+      }).join("") +
+      '<button class="activity-pick is-add" data-pick-activity-add="1"><span class="activity-pick-icon">+</span>Add your own</button>' +
+      '</div>');
+    el.querySelectorAll("[data-pick-activity]").forEach(function (b) {
+      b.addEventListener("click", function () {
+        var act = ensureActivity(b.getAttribute("data-pick-activity"));
+        persist();
+        closeListSheet();
+        done(act);
+      });
+    });
+    el.querySelector("[data-pick-activity-add]").addEventListener("click", function () {
+      openAddActivity(done);
+    });
+  }
+
   function renderExerciseBlocks(containerEl, draftObj, rerender, excludeWorkoutId) {
     if (!draftObj.exercises.length) {
       containerEl.innerHTML = '<div class="empty-state">No exercises added yet. Tap "+ Add Exercise" below.</div>';
@@ -3017,19 +3324,23 @@ import {
 
     /* Re-rendering throws away the equipment rails, and with them how far
        each one was scrolled. Remember, rebuild, put them back. */
-    var railScroll = [].map.call(containerEl.querySelectorAll(".equip-scroll"),
+    var railScroll = [].map.call(containerEl.querySelectorAll(".equip-scroll:not(.activity-scroll)"),
+      function (r) { return r.scrollLeft; });
+
+    var actScroll = [].map.call(containerEl.querySelectorAll(".activity-scroll"),
       function (r) { return r.scrollLeft; });
 
     containerEl.innerHTML = draftObj.exercises.map(function (blk, i) {
       var exObj = findExercise(blk.exerciseId);
       var metric = metricOf(blk);
+      if (metric === "cardio") return cardioBlockHtml(blk, i, exObj, draftObj.kind === "cardio", excludeWorkoutId);
       var cfg = METRICS[metric];
       var unitKey = cfg.unitKey;
 
       var last = lastSessionFor(blk.exerciseId, excludeWorkoutId);
       var lastLine = last
         ? '<div class="last-time">Last time <strong>' +
-            esc(summarizeSets(last.block.sets, metricOf(last.block), last.block.equipment)) +
+            esc(summarizeSets(last.block.sets, metricOf(last.block), last.block.equipment, exObj && exObj.name)) +
             '</strong> &middot; ' + shortDate(last.workout.performedAt) + '</div>'
         : '<div class="last-time is-new">First time logging this</div>';
 
@@ -3120,7 +3431,14 @@ import {
         '</div>';
     }).join("");
 
-    containerEl.querySelectorAll(".equip-scroll").forEach(function (rail, i) {
+    containerEl.querySelectorAll(".activity-scroll").forEach(function (rail, i) {
+      if (actScroll[i] != null) { rail.scrollLeft = actScroll[i]; return; }
+      var sel = rail.querySelector(".equip-btn.selected");
+      if (sel) rail.scrollLeft = sel.offsetLeft - (rail.clientWidth - sel.offsetWidth) / 2;
+    });
+    wireCardioBlocks(containerEl, draftObj, rerender, excludeWorkoutId);
+
+    containerEl.querySelectorAll(".equip-scroll:not(.activity-scroll)").forEach(function (rail, i) {
       if (railScroll[i] != null) { rail.scrollLeft = railScroll[i]; return; }
       // first render of this block: bring whatever is already chosen into view
       var sel = rail.querySelector(".equip-btn.selected");
@@ -3417,6 +3735,7 @@ import {
         metric: metric,
         sets: blk.sets.filter(function (s) {
           // a set counts if anything meaningful for its mode was entered
+          if (metric === "cardio") return s.seconds != null || s.distance != null || s.steps != null || s.heartRate != null;
           if (metric === "distance") return s.distance != null || s.seconds != null;
           if (metric === "time") return s.seconds != null || s.weight != null;
           return s.reps != null || s.weight != null;
@@ -3439,9 +3758,52 @@ import {
 
   document.getElementById("reuse-btn").addEventListener("click", openReusePicker);
 
+  /* Lift or Cardio. Flipping keeps what you'd entered on the other side, so
+     a stray tap never loses a half-typed lift. */
+  function setLogKind(kind) {
+    if (draft.kind === kind) return;
+    var other = draft.stash;
+    draft.stash = draft.exercises;
+    draft.kind = kind;
+    if (kind === "cardio") {
+      draft.exercises = other && other.length ? other : [cardioBlockFor(ensureActivity(lastActivityName()), null)];
+      persist();
+    } else {
+      draft.exercises = other || [];
+    }
+    renderLog();
+  }
+
+  // start where you usually start: the activity you logged most recently
+  function lastActivityName() {
+    var last = myWorkouts().filter(isCardioWorkout).sort(function (a, b) {
+      return new Date(b.performedAt) - new Date(a.performedAt);
+    })[0];
+    var ex = last && findExercise(last.exercises[0].exerciseId);
+    return ex ? ex.name : "Run";
+  }
+
+  document.querySelectorAll("#log-kind [data-kind]").forEach(function (b) {
+    b.addEventListener("click", function () { setLogKind(b.getAttribute("data-kind")); });
+  });
+
+  document.getElementById("add-cardio-btn").addEventListener("click", function () {
+    openCardioPicker(function (act) {
+      draft.exercises.push(cardioBlockFor(act, null));
+      renderLog();
+    });
+  });
+
   function renderLog() {
+    var cardio = draft.kind === "cardio";
+    document.querySelectorAll("#log-kind [data-kind]").forEach(function (b) {
+      b.classList.toggle("selected", b.getAttribute("data-kind") === (cardio ? "cardio" : "lift"));
+    });
+    document.getElementById("add-exercise-btn").hidden = cardio;
+    document.getElementById("add-cardio-btn").hidden = cardio;
+    document.getElementById("log-title").placeholder = cardio ? "e.g. Morning Run" : "e.g. Push Day";
     document.getElementById("reuse-btn").hidden =
-      !myWorkouts().length || !!(draft.exercises && draft.exercises.length);
+      cardio || !myWorkouts().length || !!(draft.exercises && draft.exercises.length);
     document.getElementById("log-gym").innerHTML = gymOptionsHtml(draft.gymId);
     document.getElementById("log-date").value = draft.date;
     document.getElementById("log-start").value = draft.startTime;
@@ -3497,7 +3859,10 @@ import {
     document.getElementById("save-workout-btn").onclick = function () {
       if (!draft.exercises.length) { showToast("Add at least one exercise first."); return; }
       var cleanExercises = cleanDraftExercises(draft);
-      if (!cleanExercises.length) { showToast("Fill in at least one set."); return; }
+      if (!cleanExercises.length) {
+        showToast(draft.kind === "cardio" ? "Add a time or distance first." : "Fill in at least one set.");
+        return;
+      }
 
       // Work out PRs against your history BEFORE this session joins it.
       var prs = detectPRs(cleanExercises, null);
@@ -3510,7 +3875,8 @@ import {
         userId: state.me.id,
         userName: state.me.name,
         gymId: draft.gymId || null,
-        title: titleInput.value.trim() || null,
+        title: titleInput.value.trim() ||
+          (draft.kind === "cardio" ? (findExercise(cleanExercises[0].exerciseId) || {}).name || null : null),
         performedAt: isoFromDateTime(draft.date, draft.startTime),
         endedAt: defaultEndIso(draft),
         calories: cals != null && !isNaN(cals) ? cals : null,
@@ -3617,6 +3983,87 @@ import {
     st.hiddenEquipment = (st.hiddenEquipment || []).filter(function (x) { return x !== name; });
   }
 
+  /* Cardio activities are exercises too (so history, charts and sync all
+     just work), marked metric "cardio". Made the first time they're used. */
+  function ensureActivity(name) {
+    var key = exerciseKey(name);
+    var found = state.exercises.filter(function (e) {
+      return !retiredExercise(e.id) && e.metric === "cardio" && exerciseKey(e.name) === key;
+    })[0];
+    if (found) return found;
+    var ex = { id: uid("ex"), name: name, category: "cardio", metric: "cardio" };
+    state.exercises.push(ex);
+    return ex;
+  }
+
+  // built-ins first, then any you added yourself
+  function activityList() {
+    var custom = state.exercises.filter(function (e) {
+      return e.metric === "cardio" && !retiredExercise(e.id) && CARDIO_BUILTIN.indexOf(e.name) === -1;
+    }).map(function (e) { return e.name; });
+    return CARDIO_BUILTIN.concat(custom);
+  }
+
+  function blankCardioSet(prof) {
+    return { reps: null, seconds: null, weight: null, distance: null, unit: "lb",
+      distUnit: (prof.dist && prof.dist[0]) || "mi", intensity: null, heartRate: null, steps: null };
+  }
+
+  // last time's numbers for this activity, lighter until you type
+  function cardioBlockFor(exObj, excludeWorkoutId) {
+    var prof = activityProfile(exObj.name);
+    var last = lastSessionFor(exObj.id, excludeWorkoutId);
+    var src = last && last.block.sets[0];
+    var st = blankCardioSet(prof);
+    if (src) {
+      ["seconds", "distance", "distUnit", "intensity", "heartRate", "steps"].forEach(function (k) {
+        if (src[k] != null) st[k] = src[k];
+      });
+      st.prefill = true;
+    }
+    return { exerciseId: exObj.id, metric: "cardio", sets: [st] };
+  }
+
+  /* "Treadmill Run" and "Stationary Bike" were Distance exercises before
+     cardio existed. They become Run and Bike; their sessions come along,
+     merged into one entry each (total time, total distance). */
+  var OLD_CARDIO_NAMES = { "treadmill run": "Run", "stationary bike": "Bike" };
+
+  function migrateCardio() {
+    var changed = false;
+    state.exercises.slice().forEach(function (ex) {
+      var to = OLD_CARDIO_NAMES[ex.name.toLowerCase()];
+      if (!to || retiredExercise(ex.id)) return;
+      var target = state.exercises.filter(function (e) {
+        return e !== ex && !retiredExercise(e.id) && e.metric === "cardio" && e.name === to;
+      })[0];
+      if (target) {
+        state.settings.retiredExercises = state.settings.retiredExercises || [];
+        state.settings.retiredExercises.push(ex.id);
+      } else {
+        ex.name = to; ex.metric = "cardio"; ex.category = "cardio";
+        target = ex;
+      }
+      myWorkouts().forEach(function (wk) {
+        wk.exercises.forEach(function (blk) {
+          if (blk.exerciseId !== ex.id) return;
+          var secs = 0, dist = 0, hasD = false, unit = null;
+          blk.sets.forEach(function (st) {
+            if (st.seconds) secs += st.seconds;
+            if (st.distance != null) { dist += st.distance; hasD = true; unit = unit || st.distUnit; }
+          });
+          blk.exerciseId = target.id;
+          blk.metric = "cardio";
+          delete blk.equipment;
+          blk.sets = [{ reps: null, seconds: secs || null, weight: null, distance: hasD ? Math.round(dist * 100) / 100 : null,
+            unit: "lb", distUnit: unit || "mi", intensity: null, heartRate: null, steps: null }];
+        });
+      });
+      changed = true;
+    });
+    return changed;
+  }
+
   function findOrCreateExercise(name) {
     var found = exerciseByKey(name);
     if (found) return found;
@@ -3699,7 +4146,9 @@ import {
 
     var parsed = parseExerciseName(query);
     var matches = state.exercises
-      .filter(function (e) { return !retiredExercise(e.id) && e.name.toLowerCase().indexOf(q) !== -1; })
+      .filter(function (e) {
+        return !retiredExercise(e.id) && e.metric !== "cardio" && e.name.toLowerCase().indexOf(q) !== -1;
+      })
       .sort(function (a, b) {
         var ua = use[a.id], ub = use[b.id];
         // ones you've done first, most recent at the top
@@ -4308,7 +4757,7 @@ import {
           : '<span class="profile-tap" data-profile="' + esc(user.id) + '">' + avatarHtml(user) + '</span>') +
         '<span class="person-body">' +
           '<span class="person-name">' + esc(who) + ' <span class="home-day-title">' +
-            esc(wk.title || "Workout") + '</span></span>' +
+            workoutTitleHtml(wk) + '</span></span>' +
           '<span class="person-sub">' +
             [esc(formatTime(wk.performedAt)), gymObj ? esc(gymLabel(gymObj)) : null]
               .concat(extra || []).concat(sessionFacts(wk).map(esc))
@@ -4727,6 +5176,7 @@ import {
     showToast("Picked your workout back up.");
   }
   migrateExerciseNames();
+  migrateCardio();
   persist();
   renderHome();
 
@@ -4739,7 +5189,7 @@ import {
   startSync({
     getState: function () { return state; },
     onChange: function () {
-      if (migrateExerciseNames()) persist();   // a pull can bring an old name back
+      if (migrateExerciseNames() | migrateCardio()) persist();   // a pull can bring an old name back
       if (pendingWorkout && state.workouts.some(function (w) { return w.id === pendingWorkout; })) {
         var wid = pendingWorkout;
         pendingWorkout = null;

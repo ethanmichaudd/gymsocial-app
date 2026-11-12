@@ -324,8 +324,15 @@ function workoutPrint(w) {
     w.photoPath || null, Boolean(w.photoData),
     w.exercises.map((b) => [
       b.exerciseId, b.metric || "reps", b.equipment || null, b.note || null, b.superset || null,
-      b.sets.map((s) => [s.reps ?? null, s.seconds ?? null, s.weight ?? null, s.distance ?? null,
-                         s.unit || "lb", s.distUnit || "mi"]),
+      b.sets.map((s) => {
+        const p = [s.reps ?? null, s.seconds ?? null, s.weight ?? null, s.distance ?? null,
+                   s.unit || "lb", s.distUnit || "mi"];
+        // cardio extras only when used, so older workouts' prints don't change
+        if (s.intensity != null || s.heartRate != null || s.steps != null) {
+          p.push(s.intensity ?? null, s.heartRate ?? null, s.steps ?? null);
+        }
+        return p;
+      }),
     ]),
   ]);
 }
@@ -469,12 +476,24 @@ async function pushWorkout(w) {
   const insB = await supabase.from("workout_exercises").insert(blocks);
   if (insB.error) throw insB.error;
 
+  // Cardio's extra columns (supabase/006_cardio.sql) are only sent when a
+  // set uses them, so lifting keeps syncing on a database without them.
+  const cardioCols = w.exercises.some((b) => b.sets.some((s) =>
+    s.intensity != null || s.heartRate != null || s.steps != null));
   const sets = [];
-  w.exercises.forEach((b, i) => b.sets.forEach((s, n) => sets.push({
-    workout_exercise_id: blocks[i].id, set_number: n + 1,
-    reps: s.reps ?? null, seconds: s.seconds ?? null, weight: s.weight ?? null,
-    weight_unit: s.unit || "lb", distance: s.distance ?? null, distance_unit: s.distUnit || "mi",
-  })));
+  w.exercises.forEach((b, i) => b.sets.forEach((s, n) => {
+    const row = {
+      workout_exercise_id: blocks[i].id, set_number: n + 1,
+      reps: s.reps ?? null, seconds: s.seconds ?? null, weight: s.weight ?? null,
+      weight_unit: s.unit || "lb", distance: s.distance ?? null, distance_unit: s.distUnit || "mi",
+    };
+    if (cardioCols) {
+      row.intensity = s.intensity ?? null;
+      row.heart_rate = s.heartRate ?? null;
+      row.steps = s.steps ?? null;
+    }
+    sets.push(row);
+  }));
   if (sets.length) {
     const insS = await supabase.from("workout_sets").insert(sets);
     if (insS.error) throw insS.error;
@@ -629,6 +648,9 @@ function workoutFromRow(r, state) {
           weight: s.weight == null ? null : Number(s.weight),
           distance: s.distance == null ? null : Number(s.distance),
           unit: s.weight_unit || "lb", distUnit: s.distance_unit || "mi",
+          intensity: s.intensity == null ? null : Number(s.intensity),
+          heartRate: s.heart_rate ?? null,
+          steps: s.steps ?? null,
         })),
       };
       if (b.equipment) out.equipment = b.equipment;
