@@ -2717,6 +2717,7 @@ import {
 
   function activateTab(name) {
     if (name === "log" && currentTab !== "log" && currentTab !== "settings") tabBeforeLog = currentTab || "home";
+    var switching = name !== currentTab;
     currentTab = name;
 
     // the button shows what pressing it will do next
@@ -2739,6 +2740,8 @@ import {
     if (name === "settings") renderSettings();
     if (name === "progress") renderProgress();
 
+    // a new page starts at the top; a redraw of the same page stays put
+    if (switching) document.getElementById("screen-" + name).scrollTop = 0;
   }
 
   document.querySelectorAll("[data-tab]").forEach(function (btn) {
