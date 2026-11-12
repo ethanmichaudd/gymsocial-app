@@ -34,7 +34,7 @@ import {
   /* Deliberately short: these five cover most of what gets logged, and a
      built-in cannot be deleted -- only hidden. Anything else you add yourself
      from the rail, and that one you can delete. */
-  var BUILTIN_EQUIPMENT = ["Bodyweight", "Dumbbell", "Barbell", "Cable", "Machine"];
+  var BUILTIN_EQUIPMENT = ["Bodyweight", "Dumbbell", "Barbell", "Cable", "Machine", "No weight"];
 
   function equipmentList(includeHidden) {
     var st = state.settings || {};
@@ -59,7 +59,8 @@ import {
     total:   { label: "Weight",       suffix: "" },
     perSide: { label: "Per side",     suffix: "/side" },
     perHand: { label: "Per hand",     suffix: " each" },
-    added:   { label: "Weight added", suffix: " added" }
+    added:   { label: "Weight",       suffix: "" },
+    none:    { label: "",             suffix: "" }   // no weight box at all
   };
 
   var DEFAULT_WEIGHT_MODE = {
@@ -67,7 +68,8 @@ import {
     "Dumbbell": "perHand",
     "Barbell": "total",
     "Cable": "total",
-    "Machine": "total"
+    "Machine": "total",
+    "No weight": "none"
   };
 
   function weightMode(equipment) {
@@ -89,9 +91,17 @@ import {
      reason Time needs it too. A run is not, so Distance still has no rail. */
   function usesEquipment(metric) { return metric !== "distance"; }
 
-  /* Nothing drops the weight column any more: on bodyweight it just becomes
-     "Weight added" and stays empty unless you hung a plate off yourself. */
-  function dropsWeight() { return false; }
+  /* Only "No weight" drops the column. Bodyweight keeps it (empty unless you
+     hung a plate off yourself); a run never had one. */
+  function dropsWeight(blk, metric) {
+    return metric !== "distance" && !!blk && weightMode(blk.equipment) === "none";
+  }
+
+  /* Per hand and per side are half the load: 50s in each hand moved 100. */
+  function loadMultiplier(equipment) {
+    var m = weightMode(equipment);
+    return m === "perHand" || m === "perSide" ? 2 : 1;
+  }
 
   /* Exercises that are obviously not rep-and-weight start in the right mode. */
   var DEFAULT_METRIC = {
@@ -174,6 +184,13 @@ import {
   /* Four is enough to say something without turning into a keyboard. */
   var REACTIONS = ["\uD83D\uDCAA", "\uD83D\uDD25", "\uD83D\uDC4F", "\uD83D\uDE4C"];
 
+  var SEED_EXERCISE_NAMES = [
+    "Barbell Bench Press", "Incline Dumbbell Press", "Back Squat", "Deadlift",
+    "Romanian Deadlift", "Overhead Press", "Pull-Up", "Barbell Row",
+    "Bicep Curl", "Tricep Pushdown", "Lateral Raise", "Lat Pulldown",
+    "Leg Press", "Plank", "Treadmill Run"
+  ];
+
   var EXERCISE_CATEGORIES = {
     "Barbell Bench Press": "push", "Incline Dumbbell Press": "push", "Overhead Press": "push",
     "Lateral Raise": "push", "Tricep Pushdown": "push",
@@ -187,12 +204,7 @@ import {
   /* A clean starting state: just you and the standard exercise catalog.
      No sample people, gyms, or sessions -- everything from here is yours. */
   function seedState() {
-    var exercises = [
-      "Barbell Bench Press", "Incline Dumbbell Press", "Back Squat", "Deadlift",
-      "Romanian Deadlift", "Overhead Press", "Pull-Up", "Barbell Row",
-      "Bicep Curl", "Tricep Pushdown", "Lateral Raise", "Lat Pulldown",
-      "Leg Press", "Plank", "Treadmill Run"
-    ].map(function (name) {
+    var exercises = SEED_EXERCISE_NAMES.map(function (name) {
       return {
         id: uid("ex"), name: name,
         category: EXERCISE_CATEGORIES[name] || "other",
@@ -404,6 +416,35 @@ import {
     }).join("") + '</div>';
   }
 
+  /* Who reacted to one of yours, and with what -- newest friends first
+     isn't knowable, so it's grouped by reaction in the bar's order. */
+  function reactorsHtml(wk) {
+    var all = reactionsOf(wk);
+    var rows = [];
+    REACTIONS.forEach(function (e) {
+      (all[e] || []).forEach(function (uid) {
+        var u = findUser(uid) || { id: uid, name: "A friend" };
+        rows.push('<div class="reactor-row">' + avatarHtml(u) +
+          '<span class="person-name">' + esc(u.name) +
+            (u.handle ? '<span class="reactor-handle">@' + esc(u.handle) + '</span>' : '') + '</span>' +
+          '<span class="reactor-emoji">' + e + '</span></div>');
+      });
+    });
+    if (!rows.length) return '';
+    return '<div class="reactors"><div class="manage-head">Reactions (' + rows.length + ')</div>' +
+      rows.join("") + '</div>';
+  }
+
+  /* A line on your own cards in History: who reacted, at a glance. */
+  function reactionSummaryHtml(wk) {
+    var all = reactionsOf(wk);
+    var n = 0, shown = [];
+    REACTIONS.forEach(function (e) {
+      if ((all[e] || []).length) { n += all[e].length; shown.push(e); }
+    });
+    return n ? '<span class="react-summary">' + shown.join("") + ' ' + n + '</span>' : '';
+  }
+
   /* One handler for every reaction button inside a container. */
   function wireReactions(root, after) {
     root.querySelectorAll("[data-react]").forEach(function (btn) {
@@ -586,11 +627,15 @@ import {
 
   /* The most recent session containing this exercise, ignoring the one being
      edited so it never compares a workout against itself. */
-  function lastSessionFor(exerciseId, excludeWorkoutId) {
+  function lastSessionFor(exerciseId, excludeWorkoutId, equipment) {
     var found = null;
     myWorkouts().forEach(function (wk) {
       if (excludeWorkoutId && wk.id === excludeWorkoutId) return;
-      var blk = wk.exercises.filter(function (we) { return we.exerciseId === exerciseId; })[0];
+      var blk = wk.exercises.filter(function (we) {
+        if (we.exerciseId !== exerciseId) return false;
+        // asked for a particular equipment: curls on a cable aren't a guide for dumbbells
+        return equipment === undefined || (we.equipment || null) === (equipment || null);
+      })[0];
       if (!blk) return;
       if (!found || new Date(wk.performedAt) > new Date(found.workout.performedAt)) {
         found = { workout: wk, block: blk };
@@ -633,9 +678,10 @@ import {
     var vol = { lb: 0, kg: 0 };
     exerciseBlocks.forEach(function (blk) {
       if (metricOf(blk) !== "reps") return; // only rep work has tonnage
+      var mult = loadMultiplier(blk.equipment);
       blk.sets.forEach(function (s) {
         if (s.weight == null || s.reps == null) return;
-        vol[s.unit === "kg" ? "kg" : "lb"] += s.weight * s.reps;
+        vol[s.unit === "kg" ? "kg" : "lb"] += s.weight * s.reps * mult;
       });
     });
     return vol;
@@ -1126,6 +1172,42 @@ import {
     '</div>';
   }
 
+  /* Right after a save is when a nudge makes sense: you just logged, and
+     notifications are how you'd hear that a friend did. Asked at most once
+     a week, and never once they're on, blocked, or impossible here. */
+  var NOTIFY_ASK_KEY = "gymsocial_notify_asked";
+
+  function maybeAskNotifications() {
+    if (!cloudEnabled() || !currentUser()) return;
+    if (pushSupport() !== "ok" || pushPermission() === "denied") return;
+    var last = 0;
+    try { last = Number(localStorage.getItem(NOTIFY_ASK_KEY)) || 0; } catch (e) { return; }
+    if (Date.now() - last < 7 * 24 * 3600 * 1000) return;
+    pushEnabled().then(function (on) {
+      if (on) return;
+      try { localStorage.setItem(NOTIFY_ASK_KEY, String(Date.now())); } catch (e) { /* ask again later */ }
+      setTimeout(function () {
+        openConfirm({
+          title: "Want notifications?",
+          body: "Get a heads-up when your friends log a workout or react to yours.",
+          confirmLabel: "Yes, turn on",
+          cancelLabel: "Not now",
+          danger: false,
+          // straight from the tap: iPhone only shows the permission prompt then
+          onConfirm: function () {
+            enablePush()
+              .then(function () { showToast("Notifications on."); })
+              .catch(function (err) {
+                var m = err && err.message;
+                if (m === "denied") showToast("Notifications are blocked. Turn them on in iPhone Settings.");
+                else if (m !== "dismissed") showToast(m || "Couldn't turn on notifications.");
+              });
+          }
+        });
+      }, 600);
+    }).catch(function () { /* not worth bothering anyone over */ });
+  }
+
   function wireNotify(el) {
     var sw = el.querySelector("#notify-switch");
     if (!sw) return;
@@ -1540,6 +1622,7 @@ import {
     var yes = document.getElementById("confirm-yes");
     yes.textContent = opts.confirmLabel || "Remove";
     yes.classList.toggle("is-danger", opts.danger !== false);
+    document.getElementById("confirm-no").textContent = opts.cancelLabel || "Cancel";
     confirmAction = opts.onConfirm;
     document.getElementById("confirm-overlay").classList.add("open");
   }
@@ -2062,6 +2145,7 @@ import {
     }).join("");
 
     if (mine) {
+      html += reactorsHtml(wk);
       html += '<button class="btn btn-ghost btn-block" id="detail-edit" style="margin-top:18px;">Edit workout</button>';
     } else {
       html += '<div class="detail-react">' + reactionBarHtml(wk) + '</div>';
@@ -2493,8 +2577,8 @@ import {
   });
 
   document.getElementById("edit-add-exercise-btn").addEventListener("click", function () {
-    openExercisePicker(function (exObj) {
-      editDraft.exercises.push(blockFromLastTime(exObj, editingId));
+    openExercisePicker(function (exObj, equip) {
+      editDraft.exercises.push(blockFromLastTime(exObj, editingId, equip));
       renderEditModal();
     });
   });
@@ -2702,6 +2786,7 @@ import {
       var dur = usesDuration(metric);
       var noWt = dropsWeight(blk, metric);
       var rows = blk.sets.map(function (s, si) {
+        var pf = s.prefill ? " is-prefill" : "";
         var v2 = metric === "distance"
           ? (s.distance == null ? "" : s.distance)
           : (s.weight == null ? "" : s.weight);
@@ -2710,17 +2795,18 @@ import {
           var p = splitDuration(s.seconds);
           firstCell =
             '<span class="dur-group">' +
-              '<input type="number" inputmode="numeric" class="dur-h" placeholder="h" value="' + esc(p.h) + '">' +
-              '<input type="number" inputmode="numeric" class="dur-m" placeholder="m" value="' + esc(p.m) + '">' +
-              '<input type="number" inputmode="numeric" class="dur-s" placeholder="s" value="' + esc(p.s) + '">' +
+              '<input type="number" inputmode="numeric" class="dur-h' + pf + '" placeholder="h" value="' + esc(p.h) + '">' +
+              '<input type="number" inputmode="numeric" class="dur-m' + pf + '" placeholder="m" value="' + esc(p.m) + '">' +
+              '<input type="number" inputmode="numeric" class="dur-s' + pf + '" placeholder="s" value="' + esc(p.s) + '">' +
             '</span>';
         } else {
-          firstCell = '<input type="number" inputmode="numeric" placeholder="Reps" class="set-v1" value="' +
+          firstCell = '<input type="number" inputmode="numeric" placeholder="Reps" class="set-v1' + pf + '" value="' +
             esc(s.reps == null ? "" : s.reps) + '">';
         }
         var col2 = metric === "distance" ? cfg.col2 : weightLabel(blk);
         var weightCells = noWt ? "" :
-          '<input type="number" inputmode="decimal" placeholder="' + esc(col2) + '" class="set-v2" value="' + esc(v2) + '">' +
+          '<input type="number" inputmode="decimal" placeholder="' + esc(col2) + '" class="set-v2' + pf + '"' +
+            (metric === "distance" ? '' : ' data-bump-ok="1"') + ' value="' + esc(v2) + '">' +
           '<button class="unit-toggle" data-unit-toggle>' + (s[unitKey] || cfg.units[0]) + '</button>';
         return '' +
           '<div class="set-row' + (dur ? " has-duration" : "") + (noWt ? " no-weight" : "") +
@@ -2802,10 +2888,12 @@ import {
       btn.addEventListener("click", function () {
         var blk = draftObj.exercises[Number(btn.getAttribute("data-add-set"))];
         var last = blk.sets[blk.sets.length - 1] || {};
-        blk.sets.push({
+        var copy = {
           reps: last.reps, seconds: last.seconds, weight: last.weight,
           distance: last.distance, unit: last.unit || "lb", distUnit: last.distUnit || "mi"
-        });
+        };
+        if (last.prefill) copy.prefill = true;   // still a suggestion until typed over
+        blk.sets.push(copy);
         rerender();
       });
     });
@@ -2840,6 +2928,14 @@ import {
         var blk = draftObj.exercises[Number(raw.slice(0, cut))];
         var eq = raw.slice(cut + 1);
         blk.equipment = blk.equipment === eq ? null : eq;   // tap again to clear
+        // an untouched suggestion follows the equipment: dumbbell curls
+        // suggest last time's dumbbell numbers, not the cable ones
+        if (blk.sets.every(function (st) { return st.prefill || isBlankSet(st); })) {
+          var n = blk.sets.length;
+          var fresh = prefillSet(blk.exerciseId, excludeWorkoutId, blk.equipment);
+          blk.sets = [fresh];
+          for (var k = 1; k < n; k++) blk.sets.push(JSON.parse(JSON.stringify(fresh)));
+        }
         rerender();
       });
     });
@@ -2960,6 +3056,12 @@ import {
     containerEl.querySelectorAll(".set-row").forEach(function (row) {
       var blk = draftObj.exercises[Number(row.getAttribute("data-ex"))];
       var setObj = blk.sets[Number(row.getAttribute("data-set"))];
+      // the first keystroke makes a suggested set yours
+      row.addEventListener("input", function () {
+        if (!setObj.prefill) return;
+        delete setObj.prefill;
+        row.querySelectorAll(".is-prefill").forEach(function (x) { x.classList.remove("is-prefill"); });
+      }, true);
       var metric = metricOf(blk);
       var cfg = METRICS[metric];
 
@@ -3020,29 +3122,37 @@ import {
     }).join("");
   }
 
-  /* Start from last time's numbers so a session is a target to beat, not a
-     blank form to retype. */
-  function blockFromLastTime(exObj, excludeWorkoutId) {
+  /* One set to start, filled in from the first set last time you did this
+     exact exercise on this exact equipment. It shows lighter until you type,
+     and "+ Add set" copies whatever is above it. */
+  function isBlankSet(st) {
+    return st.reps == null && st.seconds == null && st.weight == null && st.distance == null;
+  }
+
+  function blankSet(unit, distUnit) {
+    return { reps: null, seconds: null, weight: null, distance: null, unit: unit || "lb", distUnit: distUnit || "mi" };
+  }
+
+  function prefillSet(exerciseId, excludeWorkoutId, equipment) {
+    var src = lastSessionFor(exerciseId, excludeWorkoutId, equipment || null);
+    var first = src && src.block.sets[0];
+    if (!first) return blankSet();
+    return {
+      reps: first.reps, seconds: first.seconds, weight: first.weight, distance: first.distance,
+      unit: first.unit || "lb", distUnit: first.distUnit || "mi", prefill: true
+    };
+  }
+
+  function blockFromLastTime(exObj, excludeWorkoutId, equipment) {
     var last = lastSessionFor(exObj.id, excludeWorkoutId);
     var metric = last ? metricOf(last.block) : (exObj.metric || "reps");
-    var equip = (last && last.block.equipment) || exObj.equipment || null;
-    if (!last || !last.block.sets.length) {
-      return { exerciseId: exObj.id, metric: metric, equipment: equip,
-        sets: [{ reps: null, seconds: null, weight: null, distance: null, unit: "lb", distUnit: "mi" }] };
-    }
+    var equip = equipment || (last && last.block.equipment) || exObj.equipment || null;
+    if (!usesEquipment(metric)) equip = null;
     return {
       exerciseId: exObj.id,
       metric: metric,
       equipment: equip,
-      // Same shape as last time -- as many sets, same units -- but the boxes
-      // start empty. The "Last time" line above is the reference; nothing
-      // gets logged just because you tapped Save.
-      sets: last.block.sets.map(function (s) {
-        return {
-          reps: null, seconds: null, weight: null, distance: null,
-          unit: s.unit || "lb", distUnit: s.distUnit || "mi"
-        };
-      })
+      sets: [prefillSet(exObj.id, excludeWorkoutId, equip)]
     };
   }
 
@@ -3059,6 +3169,10 @@ import {
           if (metric === "distance") return s.distance != null || s.seconds != null;
           if (metric === "time") return s.seconds != null || s.weight != null;
           return s.reps != null || s.weight != null;
+        }).map(function (s) {
+          var c = {};
+          for (var k in s) if (k !== "prefill") c[k] = s[k];
+          return c;
         })
       };
       if (blk.equipment) {
@@ -3119,8 +3233,8 @@ import {
     };
 
     document.getElementById("add-exercise-btn").onclick = function () {
-      openExercisePicker(function (exObj) {
-        draft.exercises.push(blockFromLastTime(exObj, null));
+      openExercisePicker(function (exObj, equip) {
+        draft.exercises.push(blockFromLastTime(exObj, null, equip));
         renderLog();
       });
     };
@@ -3156,6 +3270,7 @@ import {
       activateTab("home");
       buzz(prs.length ? [18, 60, 18, 60, 40] : 18);
       openSessionSummary(workout, prs);
+      maybeAskNotifications();
     };
   }
 
@@ -3174,10 +3289,138 @@ import {
     exercisePickerCallback = null;
   }
 
-  function pickExercise(exObj) {
+  function pickExercise(exObj, equip) {
     var cb = exercisePickerCallback;
     closeExercisePicker();
-    if (cb) cb(exObj);
+    if (cb) cb(exObj, equip || null);
+  }
+
+  /* ---- "dumbbell bicep curls" -> Bicep Curl, with Dumbbell selected ----
+     The equipment is a choice on the exercise, not part of its name, so one
+     Bicep Curl collects every curl and its chart can split by equipment. */
+  var EQUIP_WORDS = [
+    [/\bsmith(\s+machine)?\b/i, "Smith Machine"],
+    [/\b(dumbbells?|db)\b/i, "Dumbbell"],
+    [/\b(barbells?|bb)\b/i, "Barbell"],
+    [/\bcables?\b/i, "Cable"],
+    [/\bmachines?\b/i, "Machine"],
+    [/\b(bodyweight|body\s+weight|bw)\b/i, "Bodyweight"]
+  ];
+  // what a bare word is short for once the equipment is taken off
+  var EXERCISE_ALIASES = { "bench": "Bench Press", "curl": "Bicep Curl", "bicep curl": "Bicep Curl",
+    "biceps curl": "Bicep Curl", "squat": "Back Squat", "row": "Barbell Row", "pulldown": "Lat Pulldown" };
+
+  function singularWord(w) {
+    var l = w.toLowerCase();
+    if (/(ss|us|is)$/.test(l)) return w;                    // press, biceps -> leave
+    if (/(sh|ch|ss)es$/.test(l)) return w.slice(0, -2);     // pushes -> push
+    if (/ies$/.test(l) && l.length > 4) return w.slice(0, -3) + "y";   // flies -> fly
+    if (/[^s]s$/.test(l) && l.length > 3) return w.slice(0, -1);       // curls -> curl
+    return w;
+  }
+
+  // compare names loosely: case, plurals and "biceps"/"bicep" don't matter
+  function exerciseKey(name) {
+    return String(name || "").toLowerCase().replace(/[^a-z0-9 ]/g, " ").split(/\s+/)
+      .filter(Boolean).map(function (w) { return singularWord(w.replace(/s$/, "")); }).join(" ");
+  }
+
+  function parseExerciseName(raw) {
+    var text = String(raw || "").trim();
+    var equipment = null;
+    for (var i = 0; i < EQUIP_WORDS.length && !equipment; i++) {
+      if (EQUIP_WORDS[i][0].test(text)) {
+        equipment = EQUIP_WORDS[i][1];
+        text = text.replace(EQUIP_WORDS[i][0], " ");
+      }
+    }
+    if (!equipment) return null;
+    text = text.replace(/\b(with|on|using|the|a)\b/gi, " ").replace(/\s+/g, " ").trim();
+    if (!text) return null;
+    var words = text.split(" ");
+    words[words.length - 1] = singularWord(words[words.length - 1]);
+    var base = titleCase(words.join(" "));
+    var alias = EXERCISE_ALIASES[base.toLowerCase()];
+    return { base: alias || base, equipment: equipment };
+  }
+
+  function retiredExercise(id) {
+    return (state.settings.retiredExercises || []).indexOf(id) !== -1;
+  }
+
+  function exerciseByKey(name) {
+    var key = exerciseKey(name);
+    return state.exercises.filter(function (e) {
+      return !retiredExercise(e.id) && exerciseKey(e.name) === key;
+    })[0] || null;
+  }
+
+  function ensureEquipment(name) {
+    var st = state.settings;
+    if (equipmentList(true).indexOf(name) === -1) st.customEquipment.push(name);
+    st.hiddenEquipment = (st.hiddenEquipment || []).filter(function (x) { return x !== name; });
+  }
+
+  function findOrCreateExercise(name) {
+    var found = exerciseByKey(name);
+    if (found) return found;
+    var exObj = {
+      id: uid("ex"), name: name,
+      category: EXERCISE_CATEGORIES[name] || "other",
+      metric: DEFAULT_METRIC[name] || "reps"
+    };
+    state.exercises.push(exObj);
+    return exObj;
+  }
+
+  /* The same clean-up for what was already logged: "Dumbbell Bicep Curls"
+     sessions become Bicep Curl sessions with Dumbbell selected, and the old
+     name drops out of the picker. Safe to run on every open. */
+  function migrateExerciseNames() {
+    var changed = false;
+    var seeded = SEED_EXERCISE_NAMES.map(function (n) { return n.toLowerCase(); });
+    state.settings.retiredExercises = state.settings.retiredExercises || [];
+    state.exercises.slice().forEach(function (ex) {
+      if (retiredExercise(ex.id) || seeded.indexOf(ex.name.toLowerCase()) !== -1) return;
+      var parsed = parseExerciseName(ex.name);
+      if (!parsed || exerciseKey(parsed.base) === exerciseKey(ex.name)) return;
+      var target = exerciseByKey(parsed.base);
+      if (target && target.id === ex.id) return;
+      if (!target) {
+        // nothing to merge into: just drop the equipment from the name
+        ex.name = parsed.base;
+        target = ex;
+      } else {
+        state.settings.retiredExercises.push(ex.id);
+      }
+      ensureEquipment(parsed.equipment);
+      myWorkouts().forEach(function (wk) {
+
+        wk.exercises.forEach(function (blk) {
+          if (blk.exerciseId !== ex.id) return;
+          blk.exerciseId = target.id;
+          if (!blk.equipment) blk.equipment = parsed.equipment;
+        });
+      });
+      changed = true;
+    });
+    // an exercise retired earlier can come back from another phone's sync
+    var retired = state.settings.retiredExercises;
+    if (retired.length) {
+      myWorkouts().forEach(function (wk) {
+        wk.exercises.forEach(function (blk) {
+          if (retired.indexOf(blk.exerciseId) === -1) return;
+          var old = findExercise(blk.exerciseId);
+          var parsed = old && parseExerciseName(old.name);
+          var target = parsed && exerciseByKey(parsed.base);
+          if (!target) return;
+          blk.exerciseId = target.id;
+          if (!blk.equipment) blk.equipment = parsed.equipment;
+          changed = true;
+        });
+      });
+    }
+    return changed;
   }
 
   /* How often and how recently you've done each exercise -- the picker is
@@ -3199,8 +3442,9 @@ import {
     var q = query.trim().toLowerCase();
     var use = exerciseUsage();
 
+    var parsed = parseExerciseName(query);
     var matches = state.exercises
-      .filter(function (e) { return e.name.toLowerCase().indexOf(q) !== -1; })
+      .filter(function (e) { return !retiredExercise(e.id) && e.name.toLowerCase().indexOf(q) !== -1; })
       .sort(function (a, b) {
         var ua = use[a.id], ub = use[b.id];
         // ones you've done first, most recent at the top
@@ -3214,12 +3458,20 @@ import {
         return a.name.localeCompare(b.name);
       });
 
-    var exact = state.exercises.some(function (e) { return e.name.toLowerCase() === q; });
+    var exact = state.exercises.some(function (e) { return !retiredExercise(e.id) && e.name.toLowerCase() === q; });
     var listEl = document.getElementById("exercise-modal-list");
 
     var html = "";
+    if (parsed && !exact) {
+      var known = exerciseByKey(parsed.base);
+      html += '<button class="picker-row is-create is-parsed" data-pick-parsed="1">' +
+        '<span class="create-plus">' + (known ? "&rsaquo;" : "+") + '</span> ' + esc(known ? known.name : parsed.base) +
+        '<span class="eq-chip">' + esc(parsed.equipment) + '</span>' +
+        '<span class="picker-sub">' + (known ? "Logs as " + esc(known.name) : "New exercise") +
+          ' with ' + esc(parsed.equipment) + ' selected</span></button>';
+    }
     // nothing typed yet, or typed something new -> offer to add it inline
-    if (q && !exact) {
+    if (q && !exact && !parsed) {
       html += '<button class="picker-row is-create" data-create-ex="1">' +
         '<span class="create-plus">+</span> Add &ldquo;' + esc(query.trim()) + '&rdquo;' +
         '<span class="picker-sub">New exercise, saved for next time</span></button>';
@@ -3241,6 +3493,13 @@ import {
       btn.addEventListener("click", function () {
         pickExercise(findExercise(btn.getAttribute("data-pick-ex")));
       });
+    });
+    var parsedBtn = listEl.querySelector("[data-pick-parsed]");
+    if (parsedBtn) parsedBtn.addEventListener("click", function () {
+      var exObj = findOrCreateExercise(parsed.base);
+      ensureEquipment(parsed.equipment);
+      persist();
+      pickExercise(exObj, parsed.equipment);
     });
     var createBtn = listEl.querySelector("[data-create-ex]");
     if (createBtn) createBtn.addEventListener("click", function () { createExerciseFrom(query.trim()); });
@@ -4022,7 +4281,8 @@ import {
         '<button class="log-row" data-open-row="' + wk.id + '">' +
           '<span class="log-date"><span class="log-day">' + d.getDate() + '</span><span class="log-mon">' + MONTHS[d.getMonth()].toUpperCase() + '</span></span>' +
           '<span class="log-body">' +
-            '<span class="log-title" style="display:block;">' + esc(wk.title || "Workout") + '</span>' +
+            '<span class="log-title" style="display:block;">' + esc(wk.title || "Workout") +
+              reactionSummaryHtml(wk) + '</span>' +
             '<span class="log-meta" style="display:block;">' +
               [esc(formatTime(wk.performedAt))]
                 .concat(gymObj ? [esc(gymLabel(gymObj))] : [])
@@ -4049,100 +4309,82 @@ import {
     renderProfileWorkouts(myWorkouts(), true);
   });
 
-  /* The storage warning matters once; after that it's clutter. */
-  (function storageNote() {
-    var note = document.getElementById("storage-note");
-    var btn = document.getElementById("note-dismiss");
-    if (!note || !btn) return;
-    if (state.settings.hideStorageNote) note.hidden = true;
-    btn.addEventListener("click", function () {
-      note.hidden = true;
-      state.settings.hideStorageNote = true;
-      persist();
-    });
-  })();
 
   document.getElementById("progress-search").addEventListener("input", function (e) {
     progressQuery = e.target.value;
     renderProgress();
   });
 
-  /* ----------------------------- the keyboard bar ----------------------------- */
+  /* ----------------------------- weight bump chips ----------------------------- */
 
-  /* Typing 187.5 is slower than tapping +2.5. The bar rides above the
-     keyboard on whichever weight field has focus, and the steps follow the
-     unit, since 2.5kg is not a plate anyone owns. */
+  /* Typing 187.5 is slower than tapping +2.5. The chips sit right under the
+     weight box you're in, inside the page -- not pinned above the keyboard,
+     which depended on iPhone reporting the keyboard's height and mostly
+     didn't. Steps follow the unit, since 2.5kg is not a plate anyone owns. */
   var BUMPS = { lb: [2.5, 5, 10], kg: [1.25, 2.5, 5] };
   var bumpTarget = null;
-  var kbCovered = 0;      // how much of the screen the keyboard is taking
 
-  function bumpSteps() {
-    var unit = "lb";
-    if (bumpTarget) {
-      var row = bumpTarget.closest(".set-row");
-      var toggle = row && row.querySelector("[data-unit-toggle]");
-      if (toggle && toggle.textContent.trim() === "kg") unit = "kg";
-    }
-    return BUMPS[unit];
+  function bumpSteps(input) {
+    var row = input && input.closest(".set-row");
+    var toggle = row && row.querySelector("[data-unit-toggle]");
+    return BUMPS[toggle && toggle.textContent.trim() === "kg" ? "kg" : "lb"];
   }
 
-  function showKbBar(input) {
-    bumpTarget = input;
-    var steps = bumpSteps();
-    var bar = document.getElementById("kb-bar");
-    bar.querySelectorAll("[data-bump]").forEach(function (chip) {
-      var i = Number(chip.getAttribute("data-bump"));
-      chip.textContent = i < 0 ? "\u2212" + steps[0] : "+" + steps[i];
-    });
-    bar.hidden = false;
-  }
-
-  function hideKbBar() {
-    document.getElementById("kb-bar").hidden = true;
+  function hideBumpRow() {
+    document.querySelectorAll(".bump-row").forEach(function (r) { r.remove(); });
     bumpTarget = null;
   }
 
-  (function wireKbBar() {
-    var bar = document.getElementById("kb-bar");
+  function applyBump(delta) {
+    if (!bumpTarget) return;
+    var now = parseFloat(bumpTarget.value);
+    var next = Math.max(0, (isNaN(now) ? 0 : now) + delta);
+    bumpTarget.value = Math.round(next * 100) / 100;
+    bumpTarget.dispatchEvent(new Event("input", { bubbles: true }));
+    buzz(8);
+  }
 
-    document.addEventListener("focusin", function (e) {
-      // only once a soft keyboard is actually up: on a laptop the bar would
-      // just sit on top of the tab bar for no reason
-      if (e.target.classList && e.target.classList.contains("set-v2")) {
-        if (kbCovered > 80) showKbBar(e.target);
-      } else if (!bar.contains(e.target)) hideKbBar();
-    });
-    document.addEventListener("focusout", function (e) {
-      // a chip steals focus for an instant; let it finish before hiding
-      setTimeout(function () {
-        if (document.activeElement === e.target) return;
-        if (!document.activeElement || !document.activeElement.classList ||
-            !document.activeElement.classList.contains("set-v2")) hideKbBar();
-      }, 120);
-    });
+  function showBumpRow(input) {
+    var row = input.closest(".set-row");
+    if (!row) return;
+    if (bumpTarget === input && row.nextElementSibling &&
+        row.nextElementSibling.classList.contains("bump-row")) return;
+    hideBumpRow();
+    bumpTarget = input;
+    var steps = bumpSteps(input);
+    var bar = document.createElement("div");
+    bar.className = "bump-row";
+    bar.innerHTML = [-steps[0], steps[0], steps[1], steps[2]].map(function (d) {
+      return '<button type="button" class="bump-chip" data-delta="' + d + '">' +
+        (d < 0 ? "\u2212" + (-d) : "+" + d) + '</button>';
+    }).join("");
+    row.insertAdjacentElement("afterend", bar);
 
-    bar.addEventListener("mousedown", function (e) { e.preventDefault(); });
-    bar.addEventListener("touchstart", function (e) { e.preventDefault(); }, { passive: false });
-
-    bar.querySelectorAll("[data-bump]").forEach(function (chip) {
-      chip.addEventListener("click", function () {
-        if (!bumpTarget) return;
-        var i = Number(chip.getAttribute("data-bump"));
-        var steps = bumpSteps();
-        var delta = i < 0 ? -steps[0] : steps[i];
-        var now = parseFloat(bumpTarget.value);
-        var next = Math.max(0, (isNaN(now) ? 0 : now) + delta);
-        bumpTarget.value = Math.round(next * 100) / 100;
-        bumpTarget.dispatchEvent(new Event("input", { bubbles: true }));
-        buzz(8);
-      });
+    bar.querySelectorAll("[data-delta]").forEach(function (chip) {
+      var delta = Number(chip.getAttribute("data-delta"));
+      // act on the touch itself and cancel it: that keeps the weight box
+      // focused (and the keyboard up) instead of tapping it away
+      chip.addEventListener("touchstart", function (e) {
+        e.preventDefault();
+        applyBump(delta);
+      }, { passive: false });
+      chip.addEventListener("mousedown", function (e) { e.preventDefault(); });
+      chip.addEventListener("click", function () { applyBump(delta); });
     });
+  }
 
-    document.getElementById("kb-done").addEventListener("click", function () {
-      if (bumpTarget) bumpTarget.blur();
-      hideKbBar();
-    });
-  })();
+  document.addEventListener("focusin", function (e) {
+    var t = e.target;
+    if (t && t.getAttribute && t.getAttribute("data-bump-ok") === "1") showBumpRow(t);
+  });
+  // Hidden a beat after you leave the box, never on the press itself: taking
+  // the row out mid-tap would shift the page and the tap would miss its button.
+  document.addEventListener("focusout", function () {
+    setTimeout(function () {
+      var a = document.activeElement;
+      if (!(a && a.getAttribute && a.getAttribute("data-bump-ok") === "1")) hideBumpRow();
+    }, 300);
+  });
 
   /* ----------------------------- theme ----------------------------- */
 
@@ -4181,12 +4423,6 @@ import {
       frame.style.bottom = covered + "px";
       // modals sit outside the frame, so they read the same number from here
       document.documentElement.style.setProperty("--kb", covered + "px");
-      kbCovered = covered;
-      // the keyboard often arrives after the focus event, so catch it here too
-      var focused = document.activeElement;
-      if (covered > 80 && focused && focused.classList &&
-          focused.classList.contains("set-v2")) showKbBar(focused);
-      else if (!covered) hideKbBar();
       // a tab bar pinned above the keyboard is just wasted room
       document.body.classList.toggle("kb-open", covered > 80);
     }
@@ -4222,6 +4458,7 @@ import {
     renderLog();
     showToast("Picked your workout back up.");
   }
+  migrateExerciseNames();
   persist();
   renderHome();
 
@@ -4234,6 +4471,7 @@ import {
   startSync({
     getState: function () { return state; },
     onChange: function () {
+      if (migrateExerciseNames()) persist();   // a pull can bring an old name back
       if (pendingWorkout && state.workouts.some(function (w) { return w.id === pendingWorkout; })) {
         var wid = pendingWorkout;
         pendingWorkout = null;
