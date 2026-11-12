@@ -99,7 +99,7 @@ import {
     var rate = cardioRate(st, prof);
     if (rate) {
       var bits = rate.split(" ");
-      t.push({ value: bits[0], label: ({ pace: "Pace ", speed: "Speed ", split: "Split " }[prof.rate]) + bits.slice(1).join(" ") });
+      t.push({ value: bits[0], label: ({ pace: "Avg pace ", speed: "Avg speed ", split: "Avg split " }[prof.rate]) + bits.slice(1).join(" ") });
     }
     if (st.heartRate != null) t.push({ value: st.heartRate, label: "Avg bpm" });
     if (st.steps != null) t.push({ value: Number(st.steps).toLocaleString(), label: "Steps" });
@@ -3191,7 +3191,7 @@ import {
     }
     if (prof.rate) {
       grid += '<div class="cf cf-rate"><span class="cf-label">' +
-        { pace: "Pace", speed: "Speed", split: "Split" }[prof.rate] + '</span>' +
+        { pace: "Avg pace", speed: "Avg speed", split: "Avg split" }[prof.rate] + '</span>' +
         '<span class="cf-rate-val" data-cardio-rate>' + (esc(cardioRate(st, prof)) || "&mdash;") + '</span></div>';
     }
     if (prof.intensity) {
