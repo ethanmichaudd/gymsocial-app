@@ -56,7 +56,7 @@
       <div class="field">
         <label class="field-label" for="log-gym">Gym (optional check-in)</label>
         <select id="log-gym"></select>
-        <button class="btn btn-ghost btn-block add-gym-link" id="add-gym-btn">+ Add gym</button>
+        <button class="btn btn-ghost btn-block add-gym-link" id="add-gym-btn">Find or add a gym</button>
       </div>
 
       <div class="field">
@@ -99,12 +99,38 @@
 
     <!-- PROGRESS -->
     <section class="screen" id="screen-progress">
-      <div class="screen-head"><h1>Progress</h1><p>Top weight per session, over time.</p></div>
+      <div class="screen-head settings-head">
+        <div><h1>Progress</h1><p>Top weight per session, over time.</p></div>
+        <button class="modal-close is-link" id="progress-done">Done</button>
+      </div>
       <div class="search-input-wrap">
         <input type="text" id="progress-search" placeholder="Search an exercise" autocomplete="off">
       </div>
       <div id="progress-results"></div>
       <div id="progress-body"></div>
+    </section>
+
+    <!-- GYMS -->
+    <section class="screen" id="screen-gyms">
+      <div class="screen-head"><h1>Gyms</h1></div>
+      <div class="places-search">
+        <div class="find-box">
+          <svg class="find-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></svg>
+          <input type="search" id="places-search" placeholder="Name or city" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="search" aria-label="Search gyms by name or city">
+          <button type="button" class="find-clear" id="places-clear" aria-label="Clear search" hidden>
+            <svg viewBox="0 0 24 24" stroke-width="2.4" stroke-linecap="round"><path d="M7 7l10 10M17 7L7 17"/></svg>
+          </button>
+        </div>
+        <button type="button" class="near-btn" id="places-near" aria-pressed="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 4 4 11l7 2 2 7z"/></svg>
+          Near me
+        </button>
+      </div>
+      <div class="places-map-wrap">
+        <div class="places-map" id="places-map" role="application" aria-label="Map of gyms"></div>
+        <div class="places-map-note" id="places-map-note" hidden></div>
+      </div>
+      <div class="places-list" id="places-list"></div>
     </section>
 
     <!-- FRIENDS -->
@@ -130,6 +156,11 @@
       <div id="profile-body">
       <div class="profile-card" id="profile-head"></div>
       <div class="stat-grid" id="profile-alltime" style="grid-template-columns:repeat(2,1fr);"></div>
+      <button class="link-row" id="profile-progress">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 16.5 9 10l3.5 3.5L20 5"/><path d="M15 5h5v5"/></svg>
+        <span class="link-row-text"><strong>Progress</strong><span>Your top weight per exercise, over time</span></span>
+        <span class="chevron">&rsaquo;</span>
+      </button>
 
       <div class="section-head"><h2>Gyms</h2></div>
       <div class="search-input-wrap">
@@ -190,9 +221,9 @@
       <svg viewBox="0 0 24 24" stroke-width="2.6" stroke-linecap="round"><path d="M12 6v12M6 12h12"/></svg>
     </button>
     <div class="tab-group">
-    <button class="tab-btn" data-tab="progress">
-      <svg viewBox="0 0 24 24" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 16.5 9 10l3.5 3.5L20 5"/><path d="M15 5h5v5"/></svg>
-      Progress
+    <button class="tab-btn" data-tab="gyms">
+      <svg viewBox="0 0 24 24" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-6.5-5.7-6.5-11a6.5 6.5 0 0 1 13 0c0 5.3-6.5 11-6.5 11z"/><circle cx="12" cy="10" r="2.4"/></svg>
+      Gyms
     </button>
     <button class="tab-btn" data-tab="profile">
       <svg viewBox="0 0 24 24" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.6"/><path d="M4.5 20a7.5 7.5 0 0 1 15 0"/></svg>
@@ -228,6 +259,11 @@
       </div>
     </div>
     <p class="gym-add-preview" id="gym-add-preview">Saves as <strong>Name &mdash; City, ST</strong></p>
+    <label class="check-row" for="gym-add-private">
+      <input type="checkbox" id="gym-add-private">
+      <span><strong>Private gym</strong> (home, apartment, office). Kept off the map and out of other people's search.</span>
+    </label>
+    <p class="gym-add-note" id="gym-add-note">The address is looked up on OpenStreetMap to put the pin on the map.</p>
     <button class="btn btn-primary btn-block" id="gym-add-save">Save gym</button>
     <button class="btn-danger-text btn-block gym-remove" id="gym-add-remove" hidden>Remove gym</button>
   </div>
@@ -245,10 +281,7 @@
         <button class="modal-close" id="gym-modal-close">Close</button>
       </div>
     </div>
-    <div id="gym-modal-offerings" style="margin-bottom:16px;"></div>
-    <div id="gym-modal-summary"></div>
-    <h3 style="font-size:14px;letter-spacing:0.03em;color:var(--text-muted);margin-bottom:8px;">What you train here</h3>
-    <div id="gym-modal-popular"></div>
+    <div id="gym-modal-body"></div>
   </div>
 </div>
 

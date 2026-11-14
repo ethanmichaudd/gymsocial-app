@@ -272,6 +272,7 @@ function adoptIntoAccount(state) {
     state.follows = [];
     state.connections = [];
     state.friendRequests = { incoming: [], outgoing: [] };
+    state.gymDirectory = [];
     state.inbox = [];
     state.inboxPeople = [];
     state.users = [state.me];
@@ -339,7 +340,21 @@ function workoutPrint(w) {
   ]);
 }
 
-const gymPrint = (g) => JSON.stringify([g.name, g.street || "", g.city || "", g.state || ""]);
+// "private" is only in the print when it's on, so gyms synced before it
+// existed don't all look changed
+const gymPrint = (g) => JSON.stringify(
+  [g.name, g.street || "", g.city || "", g.state || ""].concat(g.private ? ["private"] : []));
+
+/* Coordinates, the private flag and the gym functions arrive with
+   supabase/008_gym_places.sql. Until it has been run the database answers
+   "no such column" / "no such function"; these tell that apart from a real
+   failure so everything else keeps syncing. */
+const missingColumn = (err) => !!err && (err.code === "PGRST204" || err.code === "42703");
+const missingFunction = (err) => !!err &&
+  (err.code === "PGRST202" || /could not find the function/i.test(err.message || ""));
+const missingTable = (err) => !!err &&
+  (err.code === "PGRST205" || err.code === "42P01" || /could not find the table/i.test(err.message || ""));
+const hasPin = (g) => g.lat != null && g.lng != null;
 const exercisePrint = (e) => JSON.stringify([e.name, e.category || null, e.metric || "reps"]);
 
 function profileRow(state) {
@@ -358,6 +373,31 @@ function profileRow(state) {
   };
 }
 
+/**
+ * Copies the account's profile row onto this device. Returns false when
+ * this phone still holds something newer that has to go up (see below).
+ */
+function applyProfile(state, p) {
+  const uid = sync.user.id;
+  const me = state.me;
+  if (p.display_name) me.name = p.display_name;
+  me.handle = p.username;
+  me.isPrivate = p.is_private;
+  me.avatar = p.avatar || null;
+  // "last looked at the Inbox" only ever moves forward: if this phone
+  // looked more recently than the cloud knows, keep that and push it up
+  const seenHere = state.settings.inboxSeenAt || "";
+  Object.assign(state.settings, p.settings || {}, {
+    weeklyGoal: p.weekly_goal, streakMode: p.streak_mode,
+    customCount: p.custom_count, customDays: p.custom_days,
+  });
+  const seenAhead = seenHere > (state.settings.inboxSeenAt || "");
+  if (seenAhead) state.settings.inboxSeenAt = seenHere;
+  const meRow = (state.users || []).find((u) => u.id === uid);
+  if (meRow) Object.assign(meRow, { name: me.name, handle: me.handle, isPrivate: me.isPrivate, avatar: me.avatar });
+  return !seenAhead;
+}
+
 /* =========================================================================
    Push: this device -> cloud
    ========================================================================= */
@@ -370,6 +410,19 @@ async function pushAll() {
   adoptIntoAccount(state);
 
   // ---- profile ----
+  // A phone that has never synced this account's profile only has defaults
+  // ("You", no photo, light theme). Sending those would wipe the name, photo
+  // and settings the account already has, so take the account's copy first.
+  // The exception is a brand-new account -- its settings are still empty --
+  // where whatever was set up on this phone before signing in is the profile.
+  if (meta.profile == null) {
+    const cur = await supabase.from("profiles").select("*").eq("id", uid).maybeSingle();
+    if (cur.error) throw cur.error;
+    if (cur.data && Object.keys(cur.data.settings || {}).length) {
+      if (applyProfile(state, cur.data)) meta.profile = JSON.stringify(profileRow(state));
+      if (sync.onChange) sync.onChange();      // the theme and name show up right away
+    }
+  }
   const prof = profileRow(state);
   const profPrint = JSON.stringify(prof);
   if (meta.profile !== profPrint) {
@@ -400,11 +453,21 @@ async function pushAll() {
         meta.gyms[g.id] = print;
         continue;
       }
-      const ins = await supabase.from("gyms").insert({ id: g.id, created_by: uid, ...row });
+      const extra = {};
+      if (g.private) extra.is_private = true;
+      if (hasPin(g)) { extra.lat = g.lat; extra.lng = g.lng; }
+      let ins = await supabase.from("gyms").insert({ id: g.id, created_by: uid, ...row, ...extra });
+      if (missingColumn(ins.error)) {
+        ins = await supabase.from("gyms").insert({ id: g.id, created_by: uid, ...row });
+      } else if (!ins.error && hasPin(g)) {
+        delete g.locDirty;                       // the pin went up with the gym
+      }
       if (ins.error) throw ins.error;
     } else {
       // editing only sticks on gyms you added; RLS quietly skips the rest
-      const up = await supabase.from("gyms").update(row).eq("id", g.id);
+      const extra = g.private === undefined ? {} : { is_private: Boolean(g.private) };
+      let up = await supabase.from("gyms").update({ ...row, ...extra }).eq("id", g.id);
+      if (missingColumn(up.error)) up = await supabase.from("gyms").update(row).eq("id", g.id);
       if (up.error) throw up.error;
     }
     meta.gyms[g.id] = print;
@@ -453,7 +516,24 @@ async function pushAll() {
   }
 
   saveMeta(meta);
+  await pushGymPins(state);
   persistLocal(state);
+}
+
+/* A pin this phone placed or moved (locDirty) goes up through
+   set_gym_location, which also decides who may move one. Last, and never
+   fatal: a pin is not worth holding up your workouts for. */
+async function pushGymPins(state) {
+  if (sync.noGymPins) return;
+  for (const g of state.gyms) {
+    if (!g.locDirty || !hasPin(g) || !isUuid(g.id)) continue;
+    const { error } = await supabase.rpc("set_gym_location", { p_gym: g.id, p_lat: g.lat, p_lng: g.lng });
+    if (!error) { delete g.locDirty; continue; }
+    if (missingFunction(error)) { sync.noGymPins = true; return; }   // 008 not run yet: keep it for later
+    if (error.code === "P0001") { delete g.locDirty; continue; }     // the database said no; don't keep asking
+    console.warn("Gym pin:", error);
+    return;
+  }
 }
 
 async function pushWorkout(w) {
@@ -540,24 +620,7 @@ async function pullAll() {
   const prof = await supabase.from("profiles").select("*").eq("id", uid).maybeSingle();
   if (prof.error) throw prof.error;
   if (prof.data) {
-    const p = prof.data;
-    const me = state.me;
-    if (p.display_name) me.name = p.display_name;
-    me.handle = p.username;
-    me.isPrivate = p.is_private;
-    me.avatar = p.avatar || null;
-    // "last looked at the Inbox" only ever moves forward: if this phone
-    // looked more recently than the cloud knows, keep that and push it up
-    const seenHere = state.settings.inboxSeenAt || "";
-    Object.assign(state.settings, p.settings || {}, {
-      weeklyGoal: p.weekly_goal, streakMode: p.streak_mode,
-      customCount: p.custom_count, customDays: p.custom_days,
-    });
-    const seenAhead = seenHere > (state.settings.inboxSeenAt || "");
-    if (seenAhead) state.settings.inboxSeenAt = seenHere;
-    const meRow = (state.users || []).find((u) => u.id === uid);
-    if (meRow) Object.assign(meRow, { name: me.name, handle: me.handle, isPrivate: me.isPrivate, avatar: me.avatar });
-    if (!seenAhead) meta.profile = JSON.stringify(profileRow(state));
+    if (applyProfile(state, prof.data)) meta.profile = JSON.stringify(profileRow(state));
     changed = true;
   }
 
@@ -585,6 +648,9 @@ async function pullAll() {
 
   // ---- gyms those workouts use, plus any you added ----
   const gymIds = [...new Set(wk.data.map((r) => r.gym_id).filter(Boolean))];
+  // "my gym" comes along even before you've logged a workout there
+  const homeGym = state.settings.homeGymId;
+  if (isUuid(homeGym) && !gymIds.includes(homeGym)) gymIds.push(homeGym);
   const gq = supabase.from("gyms").select("*");
   const gy = await (gymIds.length
     ? gq.or(`created_by.eq.${uid},id.in.(${gymIds.join(",")})`)
@@ -593,6 +659,12 @@ async function pullAll() {
   gy.data.forEach((r) => {
     const g = { id: r.id, name: r.name, street: r.street || "", city: r.city || "", state: r.state || "" };
     const local = state.gyms.find((x) => x.id === r.id);
+    if (r.is_private !== undefined) g.private = Boolean(r.is_private);
+    // a pin moved on this phone and not yet sent wins over the cloud's
+    if (r.lat != null && r.lng != null && !(local && local.locDirty)) {
+      g.lat = Number(r.lat);
+      g.lng = Number(r.lng);
+    }
     if (local) Object.assign(local, g); else state.gyms.push(g);
     meta.gyms[r.id] = gymPrint(g);
   });
@@ -830,8 +902,11 @@ async function pullSocial() {
   const myGyms = new Set(state.gyms.map((g) => g.id));
   const gymIds = [...new Set(theirs.map((w) => w.gymId).filter((id) => id && !myGyms.has(id)))];
   state.foreignGyms = gymIds.length
-    ? (await selectIn("gyms", "id,name,street,city,state", "id", gymIds))
-        .map((r) => ({ id: r.id, name: r.name, street: r.street || "", city: r.city || "", state: r.state || "" }))
+    ? (await selectIn("gyms", "*", "id", gymIds))     // "*": the pin, when the database has one
+        .map((r) => ({
+          id: r.id, name: r.name, street: r.street || "", city: r.city || "", state: r.state || "",
+          lat: r.lat == null ? null : Number(r.lat), lng: r.lng == null ? null : Number(r.lng),
+        }))
     : [];
 
   const myEx = new Set(state.exercises.map((e) => e.id));
@@ -951,6 +1026,103 @@ export async function removeFriend(userId) {
   const { error } = await supabase.from("connections").delete().eq("user_a", a).eq("user_b", b);
   if (error) throw error;
   await refreshSocial(true);
+}
+
+/* =========================================================================
+   Gyms as places
+   gyms is one shared directory: everyone who trains at the same place
+   points at the same row. The numbers about a gym come from two database
+   functions that return counts only (supabase/008_gym_places.sql).
+   ========================================================================= */
+
+/**
+ * Puts a gym from the shared directory on your own list (to check in there,
+ * or make it "my gym"). It already exists in the cloud, so it's marked as
+ * synced rather than uploaded again.
+ */
+export function adoptGym(g) {
+  const state = sync.getState();
+  let mine = state.gyms.find((x) => x.id === g.id);
+  if (mine) return mine;
+  mine = { id: g.id, name: g.name, street: g.street || "", city: g.city || "", state: g.state || "", offerings: [] };
+  if (hasPin(g)) { mine.lat = g.lat; mine.lng = g.lng; }
+  if (g.private) mine.private = true;
+  state.gyms.push(mine);
+  if (sync.user && isUuid(g.id)) {
+    const meta = loadMeta();
+    meta.gyms[g.id] = gymPrint(mine);
+    saveMeta(meta);
+  }
+  return mine;
+}
+
+/**
+ * Every gym you may see, with how busy each is. Before 008 has been run
+ * this falls back to the plain list: the same gyms, without the counts
+ * (people, sessions and total come back null).
+ */
+export async function fetchGymDirectory() {
+  if (!sync.user) return null;
+  let counted = true;
+  let { data, error } = await supabase.rpc("gym_directory");
+  if (error) {
+    if (!missingFunction(error)) throw error;
+    counted = false;
+    const all = await supabase.from("gyms").select("*").order("name").limit(2000);
+    if (all.error) throw all.error;
+    data = all.data;
+  }
+  return (data || []).map((r) => ({
+    id: r.id, name: r.name, street: r.street || "", city: r.city || "", state: r.state || "",
+    lat: r.lat == null ? null : Number(r.lat), lng: r.lng == null ? null : Number(r.lng),
+    private: Boolean(r.is_private),
+    people: counted ? r.people_30d : null,
+    sessions: counted ? r.sessions_30d : null,
+    total: counted ? r.sessions_all : null,
+  }));
+}
+
+/** Totals for one gym, or null when they aren't available (signed out, or 008 not run). */
+export async function fetchGymStats(gymId) {
+  if (!sync.user || !isUuid(gymId)) return null;
+  let tz = "UTC";
+  try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"; } catch (e) { /* UTC it is */ }
+  const { data, error } = await supabase.rpc("gym_stats", { p_gym: gymId, p_tz: tz });
+  if (error) {
+    if (missingFunction(error)) return null;
+    throw error;
+  }
+  const d = data || {};
+  return {
+    people: d.people_30d || 0,
+    sessions: d.sessions_30d || 0,
+    top: Array.isArray(d.top_exercises) ? d.top_exercises : [],
+    byHour: Array.isArray(d.by_hour) ? d.by_hour : [],
+  };
+}
+
+/**
+ * Places or moves a pin for a gym that isn't on your own list (yours go up
+ * with the normal sync). Resolves true when saved, false when the database
+ * can't store pins yet; rejects with the database's reason if it refuses.
+ */
+export async function saveGymLocation(gymId, lat, lng) {
+  if (!sync.user || !isUuid(gymId)) return false;
+  const { error } = await supabase.rpc("set_gym_location", { p_gym: gymId, p_lat: lat, p_lng: lng });
+  if (!error) return true;
+  if (missingFunction(error)) return false;
+  throw new Error(error.message || "Couldn't save the pin.");
+}
+
+/** Where the map and address lookup come from (app_config), or null to keep the built-in defaults. */
+export async function fetchMapConfig() {
+  if (!supabase) return null;
+  const { data, error } = await supabase.from("app_config").select("value").eq("key", "maps").maybeSingle();
+  if (error) {
+    if (!missingTable(error)) console.warn("Map settings:", error);
+    return null;
+  }
+  return data ? data.value : null;
 }
 
 /** One reaction per person per workout; null takes yours off. */
