@@ -520,13 +520,57 @@ import {
     }
   }
 
+  /* ---- any single emoji ----
+     One emoji as a person sees it can be many characters underneath (a flag
+     is two, a family is seven), so "one" is counted in graphemes. The
+     pattern is built at run time: an older browser that can't parse it
+     falls back to a rougher check instead of failing to load the app. */
+  var EMOJI_RE = null;
+  try {
+    EMOJI_RE = new RegExp("^(?:\\p{Regional_Indicator}{2}|[#*0-9]\\uFE0F?\\u20E3|" +
+      "\\p{Extended_Pictographic}(?:\\uFE0F|\\p{Emoji_Modifier}|[\\u{E0020}-\\u{E007F}])*" +
+      "(?:\\u200D\\p{Extended_Pictographic}(?:\\uFE0F|\\p{Emoji_Modifier})*)*)$", "u");
+  } catch (e) { /* no Unicode property support */ }
+
+  /* The emoji if `raw` is exactly one, otherwise null. */
+  function oneEmoji(raw) {
+    var s = String(raw == null ? "" : raw).trim();
+    if (!s || s.length > 32) return null;
+    if (window.Intl && Intl.Segmenter) {
+      var n = 0;
+      var it = new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(s)[Symbol.iterator]();
+      while (!it.next().done) n++;
+      if (n !== 1) return null;
+    }
+    if (EMOJI_RE) return EMOJI_RE.test(s) ? s : null;
+    // rough: no letters or digits, and short enough to be one symbol
+    return /[a-z0-9\s]/i.test(s) || Array.from(s).length > 8 ? null : s;
+  }
+
+  /* The quick four, then whatever else people used on this workout.
+     Anything from the server that isn't a single emoji is never drawn. */
+  function reactionOrder(wk) {
+    var all = reactionsOf(wk);
+    return REACTIONS.concat(Object.keys(all).filter(function (e) {
+      return REACTIONS.indexOf(e) === -1 && all[e].length && oneEmoji(e);
+    }));
+  }
+
+  /* The + is a text box dressed as a chip: tapping it brings up the keyboard
+     with no script involved (iPhone only opens it from a real tap), and
+     nothing is swapped in or out, so the row never shifts under a finger. */
   function reactionBarHtml(wk) {
-    return '<div class="react-bar">' + REACTIONS.map(function (e) {
+    return '<div class="react-bar">' + reactionOrder(wk).map(function (e) {
       var n = reactionCount(wk, e);
+      if (!n && REACTIONS.indexOf(e) === -1) return '';
       return '<button class="react' + (iReacted(wk, e) ? " is-mine" : "") +
-        '" data-react="' + wk.id + '|' + e + '">' + e +
+        '" data-react="' + esc(wk.id) + '|' + esc(e) + '">' + esc(e) +
         (n ? '<span class="react-n">' + n + '</span>' : '') + '</button>';
-    }).join("") + '</div>';
+    }).join("") +
+      '<input class="react react-add" data-react-add="' + esc(wk.id) + '" type="text" placeholder="+" ' +
+        'aria-label="React with any emoji" autocomplete="off" autocorrect="off" autocapitalize="off" ' +
+        'spellcheck="false" enterkeyhint="done">' +
+    '</div>';
   }
 
   /* Who reacted to one of yours, and with what -- newest friends first
@@ -534,13 +578,13 @@ import {
   function reactorsHtml(wk) {
     var all = reactionsOf(wk);
     var rows = [];
-    REACTIONS.forEach(function (e) {
+    reactionOrder(wk).forEach(function (e) {
       (all[e] || []).forEach(function (uid) {
-        var u = findUser(uid) || { id: uid, name: "A friend" };
+        var u = findPerson(uid) || { id: uid, name: "Someone" };
         rows.push('<div class="reactor-row" data-profile="' + esc(uid) + '">' + avatarHtml(u) +
           '<span class="person-name">' + esc(u.name) +
             (u.handle ? '<span class="reactor-handle">@' + esc(u.handle) + '</span>' : '') + '</span>' +
-          '<span class="reactor-emoji">' + e + '</span></div>');
+          '<span class="reactor-emoji">' + esc(e) + '</span></div>');
       });
     });
     if (!rows.length) return '';
@@ -552,8 +596,8 @@ import {
      Not buttons -- you don't react to yourself; tap the workout for names. */
   function receivedReactionsHtml(wk) {
     var all = reactionsOf(wk);
-    var chips = REACTIONS.filter(function (e) { return (all[e] || []).length; }).map(function (e) {
-      return '<span class="react is-static">' + e + '<span class="react-n">' + all[e].length + '</span></span>';
+    var chips = reactionOrder(wk).filter(function (e) { return (all[e] || []).length; }).map(function (e) {
+      return '<span class="react is-static">' + esc(e) + '<span class="react-n">' + all[e].length + '</span></span>';
     });
     return chips.length ? '<div class="react-bar">' + chips.join("") + '</div>' : '';
   }
@@ -562,10 +606,10 @@ import {
   function reactionSummaryHtml(wk) {
     var all = reactionsOf(wk);
     var n = 0, shown = [];
-    REACTIONS.forEach(function (e) {
+    reactionOrder(wk).forEach(function (e) {
       if ((all[e] || []).length) { n += all[e].length; shown.push(e); }
     });
-    return n ? '<span class="react-summary">' + shown.join("") + ' ' + n + '</span>' : '';
+    return n ? '<span class="react-summary">' + esc(shown.slice(0, 5).join("")) + ' ' + n + '</span>' : '';
   }
 
   /* One handler for every reaction button inside a container. */
@@ -577,6 +621,25 @@ import {
         var wk = state.workouts.filter(function (w) { return w.id === parts[0]; })[0];
         if (!wk) return;
         toggleReaction(wk, parts[1]);
+        after();
+      });
+    });
+
+    root.querySelectorAll("[data-react-add]").forEach(function (box) {
+      box.addEventListener("click", function (e) { e.stopPropagation(); });
+      box.addEventListener("keydown", function (e) { if (e.key === "Enter") box.blur(); });
+      box.addEventListener("blur", function () { box.value = ""; });
+      box.addEventListener("input", function (e) {
+        if (e.isComposing || !box.value.trim()) return;
+        var emoji = oneEmoji(box.value);
+        box.value = "";
+        if (!emoji) { showToast("Pick one emoji, like 🎉"); return; }
+        var id = box.getAttribute("data-react-add");
+        var wk = state.workouts.filter(function (w) { return w.id === id; })[0];
+        if (!wk) return;
+        // typing the one you already chose leaves it on rather than clearing it
+        if (myReaction(wk) !== emoji) toggleReaction(wk, emoji);
+        box.blur();
         after();
       });
     });
@@ -706,6 +769,14 @@ import {
     return [g.street, gymPlace(g)].filter(Boolean).join(", ");
   }
   function findUser(id) { return state.users.filter(function (u) { return u.id === id; })[0]; }
+
+  /* Anyone we have a name for: friends first, then people who turned up in
+     the Inbox or a search without being friends. */
+  function findPerson(id) {
+    return findUser(id) ||
+      (state.inboxPeople || []).filter(function (u) { return u.id === id; })[0] ||
+      knownPeople[id];
+  }
 
   /* ----------------------------- your data ----------------------------- */
 
@@ -1365,8 +1436,10 @@ import {
   }
 
   /* Tapping a notification opens the app at ?workout=<id> or ?friends=1, or,
-     if it was already open, the service worker posts that same URL here. */
+     if it was already open, the service worker posts that same URL here.
+     ?friends=1 is a friend request, and those are answered in the Inbox. */
   var pendingWorkout = null;
+  var pendingInbox = false;     // asked for before we knew who's signed in
 
   function openFromUrl(href) {
     var params = new URL(href, location.href).searchParams;
@@ -1378,9 +1451,9 @@ import {
       processPendingAdd();
       return;
     }
-    if (params.get("friends")) {
+    if (params.get("friends") || params.get("inbox")) {
       activateTab("friends");
-      openFriendsManage();
+      if (authResolved) openInbox(); else pendingInbox = true;
     } else if (wid) {
       activateTab("friends");
       if (state.workouts.some(function (w) { return w.id === wid; })) openWorkoutDetail(wid);
@@ -2433,6 +2506,178 @@ import {
 
   document.getElementById("friends-manage").addEventListener("click", openFriendsManage);
 
+  /* ----------------------------- inbox ----------------------------- */
+
+  /* What happened to you: friend requests waiting on an answer, then
+     reactions to your workouts and friendships that came through. "Unread"
+     is anything newer than the last time the Inbox was opened; that time
+     lives in settings, so reading it on one phone clears it on the other. */
+  var BELL_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" ' +
+    'stroke-linecap="round" stroke-linejoin="round"><path d="M6 9.5a6 6 0 0 1 12 0c0 4.3 1.3 5.9 2 7H4c.7-1.1 2-2.7 2-7z"/>' +
+    '<path d="M10 19.5a2.1 2.1 0 0 0 4 0"/></svg>';
+
+  /* Never opened: only the last few days count as new, not all of history. */
+  function inboxSeen() {
+    return state.settings.inboxSeenAt || new Date(Date.now() - 3 * 864e5).toISOString();
+  }
+
+  function inboxActivity() {
+    if (!currentUser()) return [];
+    return (state.inbox || []).filter(function (it) {
+      if (it.kind !== "reaction") return true;
+      return state.workouts.some(function (w) { return w.id === it.workoutId; });
+    });
+  }
+
+  function inboxRequests() {
+    if (!currentUser()) return [];
+    return ((state.friendRequests || {}).incoming || []).map(findUser).filter(Boolean);
+  }
+
+  /* Requests count until they're answered; activity until it's been seen. */
+  function inboxUnread() {
+    var seen = inboxSeen();
+    return inboxRequests().length +
+      inboxActivity().filter(function (it) { return it.at && it.at > seen; }).length;
+  }
+
+  function renderBell() {
+    var badge = document.getElementById("inbox-badge");
+    if (!badge) return;
+    var n = inboxUnread();
+    badge.hidden = !n;
+    badge.textContent = n > 9 ? "9+" : String(n);
+    document.getElementById("open-inbox").setAttribute("aria-label", n ? "Inbox, " + n + " new" : "Inbox");
+  }
+
+  /* "now", "5m", "2h", "3d", then a date. */
+  function agoShort(iso) {
+    if (!iso) return "";
+    var sec = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+    if (sec < 60) return "now";
+    if (sec < 3600) return Math.floor(sec / 60) + "m";
+    if (sec < 86400) return Math.floor(sec / 3600) + "h";
+    if (sec < 7 * 86400) return Math.floor(sec / 86400) + "d";
+    return shortDate(iso);
+  }
+
+  /* `seen` is passed in rather than read, so rows stay marked new for as
+     long as this sheet is open even though opening it marks them seen. */
+  function inboxHtml(seen) {
+    var html = '<div id="inbox-root">';
+    var requests = inboxRequests();
+    var at = (state.friendRequests || {}).at || {};
+    if (requests.length) {
+      html += '<div class="manage-head">Requests</div>' + requests.map(function (u) {
+        knownPeople[u.id] = u;
+        return '<div class="manage-row inbox-request">' +
+          '<span class="profile-tap person-tap" data-profile="' + esc(u.id) + '">' +
+            avatarHtml(u) +
+            '<span class="person-body">' +
+              '<span class="person-name">' + esc(u.name) + '</span>' +
+              '<span class="person-sub">@' + esc(u.handle || "") +
+                (at[u.id] ? ' &middot; ' + esc(agoShort(at[u.id])) : '') + '</span>' +
+            '</span>' +
+          '</span>' +
+          '<span class="manage-acts">' + actBtn("accept", u.id, "Accept", "manage-act is-primary") +
+            actBtn("decline", u.id, "Decline") + '</span>' +
+        '</div>';
+      }).join("");
+    }
+
+    var items = inboxActivity();
+    if (items.length || requests.length) html += '<div class="manage-head">Activity</div>';
+    html += items.length ? items.map(function (it) {
+      var u = findPerson(it.userId) || { id: it.userId, name: "Someone" };
+      if (u.handle) knownPeople[u.id] = u;
+      var name = '<strong>' + esc(u.name) + '</strong>';
+      var text, target;
+      if (it.kind === "reaction") {
+        var wk = state.workouts.filter(function (w) { return w.id === it.workoutId; })[0];
+        text = name + ' <span class="inbox-emoji">' + esc(oneEmoji(it.emoji) || "❤️") + '</span> your ' +
+          '<strong>' + esc(wk.title || "workout") + '</strong>';
+        target = ' data-inbox-wk="' + esc(it.workoutId) + '"';
+      } else {
+        text = it.kind === "accepted" ? name + ' accepted your request' : 'You and ' + name + ' are friends';
+        target = ' data-profile="' + esc(u.id) + '"';
+      }
+      return '<button class="inbox-row' + (it.at && it.at > seen ? " is-new" : "") + '"' + target + '>' +
+        '<span class="profile-tap" data-profile="' + esc(u.id) + '">' + avatarHtml(u) + '</span>' +
+        '<span class="inbox-text">' + text + '</span>' +
+        '<span class="inbox-when">' + esc(agoShort(it.at)) + '</span>' +
+      '</button>';
+    }).join("") : '<div class="empty-state">' + (requests.length
+      ? "Nothing else yet."
+      : "Nothing yet. Friend requests and reactions to your workouts show up here.") + '</div>';
+    return html + '</div>';
+  }
+
+  function inboxIsOpen() {
+    return document.getElementById("list-modal-overlay").classList.contains("open") &&
+      !!document.getElementById("inbox-root");
+  }
+
+  function markInboxSeen() {
+    // at least as late as the newest thing shown: the server's clock stamps
+    // activity, and this phone's may be a little behind it
+    var latest = new Date().toISOString();
+    inboxActivity().forEach(function (it) { if (it.at && it.at > latest) latest = it.at; });
+    state.settings.inboxSeenAt = latest;
+    persist();
+    renderBell();
+  }
+
+  function drawInbox(el, seen) {
+    el.innerHTML = inboxHtml(seen);
+    el.querySelectorAll("[data-inbox-wk]").forEach(function (b) {
+      b.addEventListener("click", function () { openWorkoutDetail(b.getAttribute("data-inbox-wk")); });
+    });
+    el.querySelectorAll("[data-act]").forEach(function (btn) {
+      btn.onclick = function () {
+        var accept = btn.getAttribute("data-act") === "accept";
+        var id = btn.getAttribute("data-id");
+        var u = findPerson(id) || { name: "them" };
+        el.querySelectorAll('[data-id="' + id + '"]').forEach(function (b) { b.disabled = true; });
+        (accept ? acceptFriendRequest(id) : declineFriendRequest(id))
+          .then(function () {
+            if (accept) showToast("You and " + u.name + " are friends.");
+            if (inboxIsOpen()) drawInbox(el, seen);
+            renderBell();
+            renderFriends();
+            renderHome();
+          })
+          .catch(function (err) {
+            el.querySelectorAll('[data-id="' + id + '"]').forEach(function (b) { b.disabled = false; });
+            showToast((err && err.message) || "That didn't go through. Try again.");
+          });
+      };
+    });
+  }
+
+  function openInbox() {
+    if (signedOut()) {
+      openListSheet("Inbox", '<div class="signin-card is-flat">' +
+        '<div class="signin-card-icon">' + BELL_SVG + '</div>' +
+        '<div class="signin-card-title">Nothing here yet</div>' +
+        '<p class="signin-card-text">Sign in to get friend requests and see who reacted to your workouts.</p>' +
+        '<button class="btn btn-primary btn-block" data-open-auth="signin">Sign in</button>' +
+      '</div>').querySelector("[data-open-auth]").addEventListener("click", closeListSheet);
+      return;
+    }
+    var seen = inboxSeen();
+    var el = openListSheet("Inbox", "");
+    drawInbox(el, seen);
+    markInboxSeen();
+    var fresh = refreshSocial(true);
+    if (fresh) fresh.then(function () {
+      if (!inboxIsOpen()) return;
+      drawInbox(el, seen);
+      markInboxSeen();
+    }).catch(function () { /* offline: what's on this phone is still shown */ });
+  }
+
+  document.getElementById("open-inbox").addEventListener("click", openInbox);
+
   /* ----------------------------- a logged session ----------------------------- */
 
   /* What you get when you tap a session: the whole thing laid out to be read,
@@ -2845,6 +3090,7 @@ import {
     if (name === "log" && currentTab !== "log" && currentTab !== "settings") tabBeforeLog = currentTab || "home";
     var switching = name !== currentTab;
     currentTab = name;
+    renderBell();
 
     // the button shows what pressing it will do next
     var menu = document.getElementById("open-settings");
@@ -5184,7 +5430,7 @@ import {
      redraw whatever is on screen -- except mid-edit, where it would wipe
      what you're typing. */
   var wasAuthed = false;
-  if (/[?&](workout|friends|add)=/.test(location.search)) setTimeout(function () { openFromUrl(location.href); }, 0);
+  if (/[?&](workout|friends|inbox|add)=/.test(location.search)) setTimeout(function () { openFromUrl(location.href); }, 0);
 
   startSync({
     getState: function () { return state; },
@@ -5196,12 +5442,15 @@ import {
         setTimeout(function () { openWorkoutDetail(wid); }, 0);
       }
       applyTheme();
+      renderBell();
       if (editingId || currentTab === "log") return;
       activateTab(currentTab);
     },
     onStatus: function () {
       authResolved = true;
       processPendingAdd();
+      if (pendingInbox) { pendingInbox = false; openInbox(); }
+      renderBell();
       var authed = !!currentUser();
       if (authed !== wasAuthed) {
         wasAuthed = authed;

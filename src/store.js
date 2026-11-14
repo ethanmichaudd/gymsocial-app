@@ -272,6 +272,8 @@ function adoptIntoAccount(state) {
     state.follows = [];
     state.connections = [];
     state.friendRequests = { incoming: [], outgoing: [] };
+    state.inbox = [];
+    state.inboxPeople = [];
     state.users = [state.me];
     Object.assign(state.me, { id: uid, name: "You", handle: "", avatar: null, isPrivate: false });
     try { localStorage.removeItem(META_KEY); } catch (e) { /* nothing to clear */ }
@@ -544,13 +546,18 @@ async function pullAll() {
     me.handle = p.username;
     me.isPrivate = p.is_private;
     me.avatar = p.avatar || null;
+    // "last looked at the Inbox" only ever moves forward: if this phone
+    // looked more recently than the cloud knows, keep that and push it up
+    const seenHere = state.settings.inboxSeenAt || "";
     Object.assign(state.settings, p.settings || {}, {
       weeklyGoal: p.weekly_goal, streakMode: p.streak_mode,
       customCount: p.custom_count, customDays: p.custom_days,
     });
+    const seenAhead = seenHere > (state.settings.inboxSeenAt || "");
+    if (seenAhead) state.settings.inboxSeenAt = seenHere;
     const meRow = (state.users || []).find((u) => u.id === uid);
     if (meRow) Object.assign(meRow, { name: me.name, handle: me.handle, isPrivate: me.isPrivate, avatar: me.avatar });
-    meta.profile = JSON.stringify(profileRow(state));
+    if (!seenAhead) meta.profile = JSON.stringify(profileRow(state));
     changed = true;
   }
 
@@ -761,6 +768,11 @@ function purgeDemo(state) {
   });
 }
 
+const isoOrNull = (t) => {
+  const d = t ? new Date(t) : null;
+  return d && !isNaN(d) ? d.toISOString() : null;
+};
+
 /** Friends, requests, friends' workouts and every reaction on screen. */
 async function pullSocial() {
   const state = sync.getState();
@@ -768,7 +780,9 @@ async function pullSocial() {
   purgeDemo(state);
 
   const [conns, reqs] = await Promise.all([
-    supabase.from("connections").select("user_a,user_b").or(`user_a.eq.${uid},user_b.eq.${uid}`),
+    // "*" rather than named columns: requested_by (007_inbox_reactions.sql)
+    // comes along when the database has it and is simply absent when not
+    supabase.from("connections").select("*").or(`user_a.eq.${uid},user_b.eq.${uid}`),
     supabase.from("connection_requests").select("from_id,to_id,created_at")
       .or(`from_id.eq.${uid},to_id.eq.${uid}`).order("created_at", { ascending: false }),
   ]);
@@ -789,7 +803,9 @@ async function pullSocial() {
   state.users = [meRow].concat(profiles.map(userFromProfile));
   state.follows = friendIds.map((f) => [uid, f]);
   state.connections = friendIds.map((f) => [uid, f]);
-  state.friendRequests = { incoming, outgoing };
+  const requestAt = {};
+  reqs.data.forEach((r) => { if (r.to_id === uid) requestAt[r.from_id] = isoOrNull(r.created_at); });
+  state.friendRequests = { incoming, outgoing, at: requestAt };
 
   // ---- friends' recent workouts ----
   let theirs = [];
@@ -828,7 +844,7 @@ async function pullSocial() {
   // ---- reactions: one per person per workout ----
   const wkIds = state.workouts.map((w) => w.id).filter(isUuid);
   const reacts = wkIds.length
-    ? await selectIn("reactions", "workout_id,user_id,emoji", "workout_id", wkIds)
+    ? await selectIn("reactions", "*", "workout_id", wkIds)   // "*": created_at if it's there
     : [];
   const byWorkout = {};
   reacts.forEach((r) => {
@@ -836,6 +852,32 @@ async function pullSocial() {
     (all[r.emoji] = all[r.emoji] || []).push(r.user_id);
   });
   state.workouts.forEach((w) => { w.reactions = byWorkout[w.id] || {}; });
+
+  // ---- inbox: what happened to you -- reactions on your workouts and
+  //      friendships that came through. Requests are listed from above. ----
+  const mineIds = new Set(state.workouts.filter((w) => w.userId === uid).map((w) => w.id));
+  const inbox = [];
+  reacts.forEach((r) => {
+    if (r.user_id === uid || !mineIds.has(r.workout_id)) return;
+    inbox.push({ kind: "reaction", userId: r.user_id, workoutId: r.workout_id,
+                 emoji: r.emoji, at: isoOrNull(r.created_at) });
+  });
+  conns.data.forEach((c) => {
+    const other = c.user_a === uid ? c.user_b : c.user_a;
+    if (c.requested_by === other) return;     // you accepted theirs: not news to you
+    // without requested_by (older friendships) nobody knows who asked
+    inbox.push({ kind: c.requested_by === uid ? "accepted" : "friends",
+                 userId: other, at: isoOrNull(c.created_at) });
+  });
+  inbox.sort((a, b) => (b.at || "").localeCompare(a.at || ""));
+  state.inbox = inbox.slice(0, 60);
+
+  // someone who reacted without being a friend (a public account's workout)
+  const known = new Set(state.users.map((u) => u.id));
+  const strangers = [...new Set(state.inbox.map((i) => i.userId).filter((id) => !known.has(id)))];
+  state.inboxPeople = strangers.length
+    ? (await selectIn("profiles", "id,username,display_name,avatar,is_private", "id", strangers)).map(userFromProfile)
+    : [];
 
   await refreshPhotoUrls(state);
   persistLocal(state);

@@ -1,5 +1,5 @@
 /* Cache the app shell so it opens with no connection. Bump CACHE on release. */
-const CACHE = "gymsocial-v58";
+const CACHE = "gymsocial-v59";
 
 self.addEventListener("install", (event) => {
   self.skipWaiting();

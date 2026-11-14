@@ -152,6 +152,20 @@
   .icon-btn.is-open svg { stroke: var(--on-accent); }
   .icon-btn:active svg { stroke: var(--accent-strong); }
 
+  /* the unread count on the bell: sits on the button's corner, ringed in
+     the page color so it reads as separate from the button under it */
+  #open-inbox { position: relative; }
+  .bell-badge {
+    position: absolute; top: -6px; right: -6px;
+    min-width: 18px; height: 18px; padding: 0 4px;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--danger); color: var(--on-accent);
+    border: 2px solid var(--bg); border-radius: 999px;
+    font-size: 10.5px; font-weight: 700; line-height: 1;
+    font-variant-numeric: tabular-nums;
+  }
+  :root[data-theme="dark"] .bell-badge { color: var(--bg); }
+
   .build-badge {
     font-family: "Roboto Mono", monospace;
     font-size: 10px;
@@ -816,7 +830,7 @@
   .friend-open:active { background: var(--surface-2); }
 
   .react-bar {
-    display: flex; gap: 6px; padding: 0 11px 11px;
+    display: flex; flex-wrap: wrap; gap: 6px; padding: 0 11px 11px;
   }
   .detail-react .react-bar { padding: 16px 0 0; }
   .react {
@@ -832,6 +846,44 @@
     font-variant-numeric: tabular-nums;
   }
   .react.is-mine .react-n { color: var(--accent-strong); }
+  /* "+": a text box the size of a chip, so the emoji keyboard opens on a
+     plain tap. 16px type or iOS zooms the page when it takes focus. */
+  .react-bar input.react-add {
+    width: 44px; height: 29px; padding: 0; flex-shrink: 0;
+    text-align: center; font-size: 16px; line-height: 1;
+    border-radius: 999px; border-style: dashed; color: var(--text);
+    appearance: none; -webkit-appearance: none; cursor: pointer;
+  }
+  .react-bar input.react-add::placeholder { color: var(--text-muted); font-weight: 600; opacity: 1; }
+  .react-bar input.react-add:focus {
+    outline: none; border-style: solid; border-color: var(--accent); background: var(--accent-bg);
+  }
+  .react-bar input.react-add:focus::placeholder { color: transparent; }
+
+  /* ---------- inbox ---------- */
+  .inbox-row {
+    display: flex; align-items: center; gap: 11px; width: 100%; text-align: left;
+    background: none; border: none; border-bottom: 1px solid var(--border-soft);
+    padding: 11px 0; cursor: pointer; font-family: inherit; color: var(--text);
+  }
+  .inbox-row:last-child { border-bottom: none; }
+  .inbox-row:active { background: var(--surface-2); }
+  .inbox-row .avatar { width: 36px; height: 36px; font-size: 13px; }
+  .inbox-text { flex: 1; min-width: 0; font-size: 14px; line-height: 1.35; color: var(--text-muted); }
+  .inbox-text strong { color: var(--text); font-weight: 700; }
+  .inbox-emoji { font-size: 16px; }
+  .inbox-when {
+    flex-shrink: 0; font-size: 12px; color: var(--text-faint);
+    font-variant-numeric: tabular-nums;
+  }
+  /* unread: a dot ahead of the time, and the time itself picks up the accent */
+  .inbox-row.is-new .inbox-when { color: var(--accent-strong); font-weight: 600; }
+  .inbox-row.is-new .inbox-when::before {
+    content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 6px;
+    border-radius: 50%; background: var(--accent); vertical-align: 1px;
+  }
+  .inbox-request .manage-act { padding: 7px 13px; }
+  .signin-card.is-flat { border: none; padding: 18px 6px 6px; margin: 0; }
   .you-pill {
     background: var(--surface-2); color: var(--text-faint); border-radius: 999px;
     padding: 3px 8px; font-size: 10px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase;
