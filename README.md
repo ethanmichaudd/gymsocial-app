@@ -4,10 +4,22 @@ A personal training log — workouts, streaks, progress and gyms. One small
 web app that installs on your phone like a native app.
 
 ```
-  index.html ──► src/main.js ──► src/app.js   the whole app
+  index.html ──► src/main.js ──► src/app.js      starts everything, in order
                       │               │
-                      │               └─ src/store.js   where data is saved
-                      └─ src/pwa.js + public/sw.js      offline + installable
+                      │               ├─ core.js       state, saving, shared helpers, tabs
+                      │               ├─ log.js        logging, editing, the exercise picker
+                      │               ├─ cardio.js     runs, rides, rows
+                      │               ├─ feed.js       friends, reactions, comments, share card
+                      │               ├─ inbox.js      requests and activity
+                      │               ├─ gyms.js       the map, gym pages, regulars
+                      │               ├─ live.js       "at the gym now"
+                      │               ├─ home.js       calendar, day view, weekly recap
+                      │               ├─ progress.js   charts
+                      │               ├─ profile.js    your card and history
+                      │               ├─ settings.js   preferences, account, backup
+                      │               ├─ store.js      where data is saved (device + Supabase)
+                      │               └─ geo.js        map and address-lookup rules
+                      └─ src/pwa.js + public/sw.js     offline + installable
 ```
 
 No framework. The app is plain JavaScript; Vite only bundles it and Capacitor
@@ -24,6 +36,21 @@ npm run dev
 
 Open http://localhost:5173. The terminal also prints a `192.168.x.x` address —
 open that on your phone (same wifi) to try it on the device you'll actually use.
+
+## Test it
+
+```bash
+npm install                        # once
+npx playwright install chromium    # once
+npm test
+```
+
+Runs the real app at iPhone size against a stand-in Supabase (nothing touches
+the real database or OpenStreetMap) and walks through the core flows: logging,
+reactions and the Inbox, gyms and the map, comments and tags, "at the gym now",
+the share card and the weekly recap. Each flow runs signed out and signed in,
+in both themes, and against a database that hasn't run the newest migration.
+Run it before pushing; if a change breaks something, this is where it shows.
 
 ---
 

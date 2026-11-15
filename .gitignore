@@ -10,3 +10,7 @@ dist/
 
 # push keys (private)
 .env.vapid
+
+# browser tests (npm test)
+test-results/
+playwright-report/
