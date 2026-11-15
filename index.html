@@ -57,6 +57,12 @@
         <label class="field-label" for="log-gym">Gym (optional check-in)</label>
         <select id="log-gym"></select>
         <button class="btn btn-ghost btn-block add-gym-link" id="add-gym-btn">Find or add a gym</button>
+        <div class="log-live" id="log-live" hidden></div>
+      </div>
+
+      <div class="field" id="log-with-field" hidden>
+        <label class="field-label">With (optional)</label>
+        <div class="with-row" id="log-with"></div>
       </div>
 
       <div class="field">
@@ -161,6 +167,11 @@
         <span class="link-row-text"><strong>Progress</strong><span>Your top weight per exercise, over time</span></span>
         <span class="chevron">&rsaquo;</span>
       </button>
+      <button class="link-row" id="profile-recap">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="15" rx="2.5"/><path d="M4 10h16M8.5 3v4M15.5 3v4"/></svg>
+        <span class="link-row-text"><strong>Last week</strong><span>Your weekly recap: workouts, volume, records</span></span>
+        <span class="chevron">&rsaquo;</span>
+      </button>
 
       <div class="section-head"><h2>Gyms</h2></div>
       <div class="search-input-wrap">
@@ -186,6 +197,8 @@
 
       <div class="stat-grid" id="profile-stats"></div>
       <div id="goal-bar"></div>
+      <div class="home-live" id="home-live" hidden></div>
+      <div id="home-recap" hidden></div>
 
 
       <div class="cal-card">

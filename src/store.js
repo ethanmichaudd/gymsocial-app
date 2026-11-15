@@ -124,6 +124,8 @@ export async function signUp(username, password) {
 export async function signOut(storageKey) {
   // stop this phone getting the old account's notifications
   try { await disablePush(); } catch (e) { /* not subscribed */ }
+  // and don't leave "at the gym" showing for an account nobody is signed in to
+  try { await clearPresence(); } catch (e) { /* nothing to clear */ }
   // a deleted or expired session can make this fail; sign out locally anyway
   try { await supabase.auth.signOut(); }
   catch (e) { await supabase.auth.signOut({ scope: "local" }).catch(() => {}); }
@@ -322,7 +324,15 @@ function remapGym(state, from, to) {
 /* ---------- fingerprints: has this thing changed since it was synced? ---------- */
 
 function workoutPrint(w) {
-  return JSON.stringify([
+  const print = workoutBasePrint(w);
+  // tags only when there are some, so workouts synced before tagging existed
+  // don't all look changed
+  if (w.withIds && w.withIds.length) print.push(["with"].concat(w.withIds.slice().sort()));
+  return JSON.stringify(print);
+}
+
+function workoutBasePrint(w) {
+  return [
     w.gymId || null, w.title || null, w.performedAt, w.endedAt || null, w.calories ?? null,
     w.photoPath || null, Boolean(w.photoData),
     w.exercises.map((b) => [
@@ -337,7 +347,7 @@ function workoutPrint(w) {
         return p;
       }),
     ]),
-  ]);
+  ];
 }
 
 // "private" is only in the print when it's on, so gyms synced before it
@@ -498,6 +508,7 @@ async function pushAll() {
     if (meta.workouts[w.id] === workoutPrint(w)) continue;
     await pushPhoto(w, meta);
     await pushWorkout(w);
+    await pushTags(w);
     meta.workouts[w.id] = workoutPrint(w);
     saveMeta(meta);
   }
@@ -579,6 +590,30 @@ async function pushWorkout(w) {
   if (sets.length) {
     const insS = await supabase.from("workout_sets").insert(sets);
     if (insS.error) throw insS.error;
+  }
+}
+
+/* Who you trained with. Only the difference is sent -- re-adding a tag that
+   is already there would notify that friend all over again. Never fatal:
+   a tag the database refuses (no longer friends) must not block the workout. */
+async function pushTags(w) {
+  if (sync.noTags || !Array.isArray(w.withIds)) return;
+  const want = w.withIds.filter(isUuid);
+  const cur = await supabase.from("workout_tags").select("user_id").eq("workout_id", w.id);
+  if (cur.error) {
+    if (missingTable(cur.error)) { sync.noTags = true; return; }   // 009 not run yet
+    throw cur.error;
+  }
+  const have = cur.data.map((r) => r.user_id);
+  const add = want.filter((id) => !have.includes(id));
+  const drop = have.filter((id) => !want.includes(id));
+  if (add.length) {
+    const ins = await supabase.from("workout_tags").insert(add.map((id) => ({ workout_id: w.id, user_id: id })));
+    if (ins.error) console.warn("Tags:", ins.error);
+  }
+  if (drop.length) {
+    const del = await supabase.from("workout_tags").delete().eq("workout_id", w.id).in("user_id", drop);
+    if (del.error) console.warn("Tags:", del.error);
   }
 }
 
@@ -681,6 +716,9 @@ async function pullAll() {
       // unsynced edits on this device win; they go up on the next push
       if (meta.workouts[r.id] && meta.workouts[r.id] !== workoutPrint(local)) return;
       incoming.reactions = local.reactions || {};
+      // comments and tags arrive with the social pull, not with the workout row
+      if (local.comments) incoming.comments = local.comments;
+      if (local.withIds) incoming.withIds = local.withIds;
       if (local.photoPath === incoming.photoPath && local.photoUrl) {
         incoming.photoUrl = local.photoUrl;
         incoming.photoUrlExpires = local.photoUrlExpires;
@@ -897,10 +935,26 @@ async function pullSocial() {
   });
   state.workouts = state.workouts.filter((w) => w.userId === uid).concat(theirs);
 
+  // ---- who is at the gym right now (friends who turned that on) ----
+  let live = [];
+  if (!sync.noPresence && friendIds.length) {
+    try {
+      const nowIso = new Date().toISOString();
+      live = (await selectIn("presence", "*", "user_id", friendIds, (q) => q.gt("expires_at", nowIso)))
+        .map((r) => ({ userId: r.user_id, gymId: r.gym_id,
+                       startedAt: isoOrNull(r.started_at), expiresAt: isoOrNull(r.expires_at) }));
+    } catch (err) {
+      if (!missingTable(err)) throw err;
+      sync.noPresence = true;                 // 009 not run yet
+    }
+  }
+  state.liveFriends = live;
+
   // ---- the gyms and exercise names their workouts mention ----
   // Kept apart from yours so they never show up in your own pickers.
   const myGyms = new Set(state.gyms.map((g) => g.id));
-  const gymIds = [...new Set(theirs.map((w) => w.gymId).filter((id) => id && !myGyms.has(id)))];
+  const gymIds = [...new Set(theirs.map((w) => w.gymId).concat(live.map((l) => l.gymId))
+    .filter((id) => id && !myGyms.has(id)))];
   state.foreignGyms = gymIds.length
     ? (await selectIn("gyms", "*", "id", gymIds))     // "*": the pin, when the database has one
         .map((r) => ({
@@ -928,10 +982,67 @@ async function pullSocial() {
   });
   state.workouts.forEach((w) => { w.reactions = byWorkout[w.id] || {}; });
 
-  // ---- inbox: what happened to you -- reactions on your workouts and
-  //      friendships that came through. Requests are listed from above. ----
+  // ---- comments (supabase/009_social.sql; skipped until it has been run) ----
+  let comments = [];
+  if (!sync.noComments && wkIds.length) {
+    try {
+      comments = await selectIn("comments", "*", "workout_id", wkIds, (q) => q.order("created_at"));
+      const thread = {};
+      comments.forEach((c) => {
+        (thread[c.workout_id] = thread[c.workout_id] || []).push(
+          { id: c.id, userId: c.user_id, body: c.body, at: isoOrNull(c.created_at) });
+      });
+      Object.values(thread).forEach((list) => list.sort((a, b) => (a.at || "").localeCompare(b.at || "")));
+      state.workouts.forEach((w) => { w.comments = thread[w.id] || []; });
+    } catch (err) {
+      if (!missingTable(err)) throw err;
+      sync.noComments = true;
+    }
+  }
+
+  // ---- who trained with whom ----
+  let tags = [];
+  if (!sync.noTags && wkIds.length) {
+    try {
+      tags = await selectIn("workout_tags", "*", "workout_id", wkIds);
+      const withBy = {};
+      tags.forEach((t) => { (withBy[t.workout_id] = withBy[t.workout_id] || []).push(t.user_id); });
+      const meta = loadMeta();
+      state.workouts.forEach((w) => {
+        const next = withBy[w.id] || [];
+        if (w.userId !== uid) { w.withIds = next; return; }
+        // yours: an edit that hasn't gone up yet keeps its own list. Otherwise
+        // take the cloud's and note it as synced, so it isn't pushed straight back.
+        if (meta.workouts[w.id] !== workoutPrint(w)) return;
+        w.withIds = next;
+        meta.workouts[w.id] = workoutPrint(w);
+      });
+      saveMeta(meta);
+    } catch (err) {
+      if (!missingTable(err)) throw err;
+      sync.noTags = true;
+    }
+  }
+
+  // what this database can do, so screens can hide what it can't yet
+  state.features = { comments: !sync.noComments, tags: !sync.noTags, live: !sync.noPresence };
+
+  // ---- inbox: what happened to you -- reactions and comments on your
+  //      workouts, workouts you were tagged in, and friendships that came
+  //      through. Requests are listed from above. ----
   const mineIds = new Set(state.workouts.filter((w) => w.userId === uid).map((w) => w.id));
+  const ownerOf = {};
+  state.workouts.forEach((w) => { ownerOf[w.id] = w.userId; });
   const inbox = [];
+  comments.forEach((c) => {
+    if (c.user_id === uid || !mineIds.has(c.workout_id)) return;
+    inbox.push({ kind: "comment", userId: c.user_id, workoutId: c.workout_id,
+                 text: String(c.body || "").slice(0, 120), at: isoOrNull(c.created_at) });
+  });
+  tags.forEach((t) => {
+    if (t.user_id !== uid || !ownerOf[t.workout_id] || ownerOf[t.workout_id] === uid) return;
+    inbox.push({ kind: "tag", userId: ownerOf[t.workout_id], workoutId: t.workout_id, at: isoOrNull(t.created_at) });
+  });
   reacts.forEach((r) => {
     if (r.user_id === uid || !mineIds.has(r.workout_id)) return;
     inbox.push({ kind: "reaction", userId: r.user_id, workoutId: r.workout_id,
@@ -947,9 +1058,11 @@ async function pullSocial() {
   inbox.sort((a, b) => (b.at || "").localeCompare(a.at || ""));
   state.inbox = inbox.slice(0, 60);
 
-  // someone who reacted without being a friend (a public account's workout)
+  // someone who reacted or commented without being your friend (a public
+  // account's workout, or a friend's friend on a workout you can both see)
   const known = new Set(state.users.map((u) => u.id));
-  const strangers = [...new Set(state.inbox.map((i) => i.userId).filter((id) => !known.has(id)))];
+  const strangers = [...new Set(state.inbox.map((i) => i.userId).concat(comments.map((c) => c.user_id))
+    .filter((id) => !known.has(id)))];
   state.inboxPeople = strangers.length
     ? (await selectIn("profiles", "id,username,display_name,avatar,is_private", "id", strangers)).map(userFromProfile)
     : [];
@@ -1123,6 +1236,54 @@ export async function fetchMapConfig() {
     return null;
   }
   return data ? data.value : null;
+}
+
+/* =========================================================================
+   Comments, and "at the gym now"  (supabase/009_social.sql)
+   ========================================================================= */
+
+/** Posts a comment and returns it as the app stores it: { id, userId, body, at }. */
+export async function addComment(workoutId, body) {
+  if (!sync.user || !isUuid(workoutId)) throw new Error("Sign in to comment.");
+  const text = String(body || "").trim().slice(0, 500);
+  if (!text) throw new Error("Write something first.");
+  const { data, error } = await supabase.from("comments")
+    .insert({ workout_id: workoutId, user_id: sync.user.id, body: text }).select("*").single();
+  if (error) {
+    if (missingTable(error)) { sync.noComments = true; throw new Error("Comments need a database update (supabase/009_social.sql)."); }
+    if (error.code === "42501") throw new Error("Only friends can comment on this workout.");
+    throw new Error("Couldn\u2019t post that. Check your connection.");
+  }
+  return { id: data.id, userId: data.user_id, body: data.body, at: isoOrNull(data.created_at) || new Date().toISOString() };
+}
+
+/** Takes down a comment you wrote, or one on your own workout. */
+export async function deleteComment(id) {
+  if (!sync.user || !isUuid(id)) return;
+  const { error } = await supabase.from("comments").delete().eq("id", id);
+  if (error) throw new Error("Couldn\u2019t delete that. Check your connection.");
+}
+
+/**
+ * Shows friends you're at a gym. The database keeps it for three hours at
+ * most. Resolves false when the database can't do this yet (009 not run).
+ */
+export async function setPresence(gymId) {
+  if (!sync.user || !isUuid(gymId)) return false;
+  const { error } = await supabase.from("presence")
+    .upsert({ user_id: sync.user.id, gym_id: gymId }, { onConflict: "user_id" });
+  if (!error) return true;
+  if (missingTable(error)) { sync.noPresence = true; return false; }
+  throw new Error(error.message || "Couldn\u2019t share where you are.");
+}
+
+/** Stops showing you at a gym. Resolves false when the database can't do this yet. */
+export async function clearPresence() {
+  if (!sync.user || !supabase) return false;
+  const { error } = await supabase.from("presence").delete().eq("user_id", sync.user.id);
+  if (!error) return true;
+  if (missingTable(error)) { sync.noPresence = true; return false; }
+  throw new Error(error.message || "Couldn\u2019t clear where you are.");
 }
 
 /** One reaction per person per workout; null takes yours off. */

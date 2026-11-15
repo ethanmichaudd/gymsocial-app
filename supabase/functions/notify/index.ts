@@ -7,6 +7,12 @@
 //   workout logged    -> everyone connected to the author: "@maya logged Push Day 💪"
 //   reaction added    -> the workout's owner:              "@maya reacted 🔥 to Push Day"
 //   friend request    -> the person asked:                 "@maya sent you a friend request"
+//   comment added     -> the workout's owner:              "@maya commented on Push Day: nice work"
+//   tagged            -> the friend who was tagged:        "@maya tagged you in Push Day"
+//
+// The last two need their own Database Webhooks (INSERT on comments and on
+// workout_tags), pointed at this same function, after supabase/009_social.sql
+// has been run. Without them everything still works; those two just don't buzz.
 //
 // Secrets it needs (Edge Functions -> Secrets): VAPID_PUBLIC_KEY,
 // VAPID_PRIVATE_KEY, VAPID_SUBJECT. SUPABASE_URL and
@@ -106,6 +112,33 @@ async function onRequest(q: Record<string, string>) {
   });
 }
 
+async function onComment(c: Record<string, string>) {
+  const { data: w } = await db.from("workouts").select("id,user_id,title")
+    .eq("id", c.workout_id).maybeSingle();
+  if (!w || w.user_id === c.user_id) return 0;      // no buzz for commenting on your own
+  const who = await handleOf(c.user_id);
+  const text = String(c.body || "").replace(/\s+/g, " ").trim();
+  return send([w.user_id], {
+    title: "GymSocial",
+    body: `${who} commented on ${w.title || "your workout"}: ${text.length > 90 ? text.slice(0, 89) + "\u2026" : text}`,
+    url: `?workout=${w.id}`,
+    tag: `comment-${w.id}`,                            // a busy thread stacks into one
+  });
+}
+
+async function onTag(t: Record<string, string>) {
+  const { data: w } = await db.from("workouts").select("id,user_id,title")
+    .eq("id", t.workout_id).maybeSingle();
+  if (!w || w.user_id === t.user_id) return 0;
+  const who = await handleOf(w.user_id);
+  return send([t.user_id], {
+    title: "GymSocial",
+    body: `${who} tagged you in ${w.title || "a workout"}`,
+    url: `?inbox=1`,                                   // the Inbox has the "Add to my log" button
+    tag: `tag-${w.id}`,
+  });
+}
+
 Deno.serve(async (req) => {
   try {
     const body = await req.json();
@@ -114,6 +147,8 @@ Deno.serve(async (req) => {
     if (body.table === "workouts") sent = await onWorkout(body.record);
     else if (body.table === "reactions") sent = await onReaction(body.record);
     else if (body.table === "connection_requests") sent = await onRequest(body.record);
+    else if (body.table === "comments") sent = await onComment(body.record);
+    else if (body.table === "workout_tags") sent = await onTag(body.record);
     return Response.json({ sent });
   } catch (err) {
     console.error(err);

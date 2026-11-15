@@ -4,7 +4,8 @@ import {
   refreshSocial, searchPeople, sendFriendRequest, acceptFriendRequest, declineFriendRequest,
   cancelFriendRequest, removeFriend, setReaction, setUsername, USERNAME_RULE, usesUsernameLogin,
   pushSupport, pushPermission, pushEnabled, enablePush, disablePush,
-  adoptGym, fetchGymDirectory, fetchGymStats, saveGymLocation, fetchMapConfig
+  adoptGym, fetchGymDirectory, fetchGymStats, saveGymLocation, fetchMapConfig,
+  addComment, deleteComment, setPresence, clearPresence
 } from "./store.js";
 import {
   setMapConfig, mapConfig, MAP_ATTRIBUTION, canLocate, locateGym,
@@ -575,7 +576,53 @@ import {
       '<input class="react react-add" data-react-add="' + esc(wk.id) + '" type="text" placeholder="+" ' +
         'aria-label="React with any emoji" autocomplete="off" autocorrect="off" autocapitalize="off" ' +
         'spellcheck="false" enterkeyhint="done">' +
+      commentChipHtml(wk, false) +
     '</div>';
+  }
+
+  /* ---- comments and tags: only where the database has them ----
+     Both arrive with supabase/009_social.sql. Until the first sync says
+     otherwise they're assumed to be there; after it, a database without
+     them simply doesn't show the controls. */
+  function featureOn(name) {
+    return !!currentUser() && (state.features || {})[name] !== false;
+  }
+
+  function workoutById(id) {
+    return state.workouts.filter(function (w) { return w.id === id; })[0];
+  }
+
+  var COMMENT_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" ' +
+    'stroke-linecap="round" stroke-linejoin="round"><path d="M20 12.3a7.6 7.6 0 0 1-11.2 6.7L4 20l1.1-4.5A7.6 7.6 0 1 1 20 12.3z"/></svg>';
+  var SEND_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" ' +
+    'stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5"/></svg>';
+
+  /* The speech bubble at the end of a reaction bar: how many comments, and
+     the way in to read or write one. On your own workouts (which have no
+     buttons to react with) it only shows once there is something to read. */
+  function commentChipHtml(wk, onlyIfAny) {
+    if (!featureOn("comments")) return "";
+    var n = (wk.comments || []).length;
+    if (onlyIfAny && !n) return "";
+    return '<button class="react comment-chip" data-comments="' + esc(wk.id) + '" aria-label="' +
+      (n ? n + (n === 1 ? " comment" : " comments") : "Comment") + '">' + COMMENT_SVG +
+      (n ? '<span class="react-n">' + n + '</span>' : '') + '</button>';
+  }
+
+  /* Who a workout was done with: "with Maya, Dev". First names, "you" for
+     you, and a count once the line would run long. */
+  function withPeople(wk) {
+    return (wk.withIds || []).map(function (id) {
+      if (id === state.me.id) return { id: id, name: state.me.name, avatar: state.me.avatar, isMe: true };
+      return findPerson(id) || null;
+    }).filter(Boolean);
+  }
+
+  function withText(wk) {
+    var people = withPeople(wk);
+    if (!people.length) return "";
+    var names = people.slice(0, 3).map(function (u) { return u.isMe ? "you" : String(u.name).split(" ")[0]; });
+    return "with " + names.join(", ") + (people.length > 3 ? " +" + (people.length - 3) : "");
   }
 
   /* Who reacted to one of yours, and with what -- newest friends first
@@ -604,7 +651,8 @@ import {
     var chips = reactionOrder(wk).filter(function (e) { return (all[e] || []).length; }).map(function (e) {
       return '<span class="react is-static">' + esc(e) + '<span class="react-n">' + all[e].length + '</span></span>';
     });
-    return chips.length ? '<div class="react-bar">' + chips.join("") + '</div>' : '';
+    var talk = commentChipHtml(wk, true);
+    return chips.length || talk ? '<div class="react-bar">' + chips.join("") + talk + '</div>' : '';
   }
 
   /* A line on your own cards in History: who reacted, at a glance. */
@@ -627,6 +675,13 @@ import {
         if (!wk) return;
         toggleReaction(wk, parts[1]);
         after();
+      });
+    });
+
+    root.querySelectorAll("[data-comments]").forEach(function (btn) {
+      btn.addEventListener("click", function (e) {
+        e.stopPropagation();
+        openWorkoutDetail(btn.getAttribute("data-comments"), { comment: true });
       });
     });
 
@@ -918,8 +973,9 @@ import {
   /* A PR means beating your own previous best on that lift, measured the way
      that lift is measured -- heaviest weight, longest hold, furthest distance.
      The first time you log an exercise isn't a PR; that would cheapen it. */
-  function detectPRs(exerciseBlocks, excludeWorkoutId) {
+  function detectPRs(exerciseBlocks, excludeWorkoutId, before) {
     var prs = [];
+    var cutoff = before ? new Date(before).getTime() : null;
     exerciseBlocks.forEach(function (blk) {
       var metric = metricOf(blk);
       if (metric === "cardio") return;      // a run isn't a lift record
@@ -930,6 +986,7 @@ import {
       var prev = null;
       myWorkouts().forEach(function (wk) {
         if (excludeWorkoutId && wk.id === excludeWorkoutId) return;
+        if (cutoff !== null && new Date(wk.performedAt).getTime() >= cutoff) return;
         wk.exercises.forEach(function (we) {
           if (we.exerciseId !== blk.exerciseId) return;
           if (metricOf(we) !== metric) return; // only compare like with like
@@ -950,6 +1007,13 @@ import {
       }
     });
     return prs;
+  }
+
+  /* The records a workout of yours set on the day it happened: measured
+     against everything before it, not against what you've done since. */
+  function prsAt(wk) {
+    if (!wk || wk.userId !== state.me.id) return [];
+    return detectPRs(wk.exercises, wk.id, wk.performedAt);
   }
 
   /* Cheap tactility -- ignored on devices that don't support it. */
@@ -1227,6 +1291,7 @@ import {
       '<div>' +
         accountBlockHtml() +
         notifyBlockHtml() +
+        liveBlockHtml() +
         '<div class="setting-block">' +
           '<label class="field-label">Equipment</label>' +
           '<div class="equip-wrap">' +
@@ -1282,6 +1347,7 @@ import {
 
     wireAccount(el);
     wireNotify(el);
+    wireLive(el);
     el.querySelector("#open-data").addEventListener("click", openDataSheet);
 
     var equipInput = el.querySelector("#set-equip");
@@ -1379,6 +1445,180 @@ import {
     '</div>';
   }
 
+  /* ----------------------------- at the gym now ----------------------------- */
+
+  /* Opt-in, and off until you say so. With it on, checking in to a gym for
+     today's workout shows friends "Maya is at Planet Fitness · 25m". It ends
+     when you save or cancel the workout, pick a different day, tap Stop, or
+     three hours pass -- the database enforces the three hours on its own,
+     so a closed app can't leave you "at the gym" all night. */
+  var LIVE_MS = 3 * 3600 * 1000;
+  var liveQueue = Promise.resolve();    // start/stop reach the database in the order they happened
+
+  function liveAllowed() {
+    return !!currentUser() && !!state.settings.shareLive && featureOn("live");
+  }
+
+  function todayInput() {
+    return dateInputValue(new Date().toISOString());
+  }
+
+  /* Where you're currently showing, or null. Forgets itself when it's stale. */
+  function myLive() {
+    var l = state.myLive;
+    if (!l) return null;
+    if (Date.now() - new Date(l.at).getTime() > LIVE_MS) {
+      delete state.myLive;
+      return null;
+    }
+    // Not shown while it can't be true (e.g. the moment after opening the
+    // app, before the account has loaded) -- but not forgotten either.
+    return liveAllowed() ? l : null;
+  }
+
+  function sinceShort(iso) {
+    var m = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
+    return m < 60 ? m + "m" : Math.floor(m / 60) + "h " + (m % 60) + "m";
+  }
+
+  function startLive(gymId) {
+    if (!liveAllowed() || !gymId || draft.date !== todayInput()) return;
+    var cur = myLive();
+    if (cur && cur.gymId === gymId) return;
+    state.myLive = { gymId: gymId, at: new Date().toISOString() };
+    persist();
+    var undo = function () {
+      if (state.myLive && state.myLive.gymId === gymId) { delete state.myLive; persist(); renderLiveBits(); }
+    };
+    liveQueue = liveQueue.then(function () { return setPresence(gymId); })
+      .then(function (ok) { if (!ok) undo(); }, undo);
+    renderLiveBits();
+  }
+
+  function stopLive() {
+    if (!state.myLive) return;
+    delete state.myLive;
+    persist();
+    liveQueue = liveQueue.then(function () { return clearPresence(); }).catch(function () { /* it expires on its own */ });
+    renderLiveBits();
+  }
+
+  function renderLiveBits() {
+    renderLogLive();
+    if (currentTab === "home") renderHomeLive();
+  }
+
+  /* Friends who are at a gym right now: [{ user, gym, at }]. */
+  function liveFriends() {
+    if (!currentUser()) return [];
+    var now = Date.now();
+    return (state.liveFriends || []).filter(function (l) {
+      return l.expiresAt && new Date(l.expiresAt).getTime() > now;
+    }).map(function (l) {
+      return { user: findUser(l.userId), gym: findGym(l.gymId), gymId: l.gymId, at: l.startedAt };
+    }).filter(function (l) { return l.user && l.gym; });
+  }
+
+  /* Under the gym picker on the log screen: either the way to start showing,
+     or a plain statement that you are, with a way to stop. */
+  function renderLogLive() {
+    var el = document.getElementById("log-live");
+    if (!el) return;
+    var g = draft.gymId ? knownGym(draft.gymId) : null;
+    var live = myLive();
+    var html = "";
+    if (g && live && live.gymId === draft.gymId) {
+      html = '<span class="live-dot"></span>' +
+        '<span class="live-text">Friends can see you’re at <strong>' + esc(g.name) + '</strong> &middot; ' +
+          esc(sinceShort(live.at)) + '</span>' +
+        '<button type="button" class="text-link" id="live-stop">Stop</button>';
+    } else if (g && liveAllowed() && draft.date === todayInput()) {
+      html = '<button type="button" class="live-start" id="live-start">' +
+        '<span class="live-dot is-off"></span>I’m here now: show my friends</button>';
+    }
+    el.hidden = !html;
+    el.innerHTML = html;
+    var stop = el.querySelector("#live-stop");
+    if (stop) stop.addEventListener("click", stopLive);
+    var start = el.querySelector("#live-start");
+    if (start) start.addEventListener("click", function () { startLive(draft.gymId); });
+  }
+
+  /* On Home, above the calendar: who is training right now. */
+  function renderHomeLive() {
+    var el = document.getElementById("home-live");
+    if (!el) return;
+    var html = "";
+    var mine = myLive();
+    var mineGym = mine ? knownGym(mine.gymId) : null;
+    if (mine && mineGym) {
+      html += '<div class="live-row is-me"><span class="live-dot"></span>' +
+        '<span class="live-text">Friends can see you’re at <strong>' + esc(mineGym.name) + '</strong> &middot; ' +
+          esc(sinceShort(mine.at)) + '</span>' +
+        '<button type="button" class="text-link" id="home-live-stop">Stop</button></div>';
+    }
+    html += liveFriends().map(function (l) {
+      return '<button class="live-row" data-live-gym="' + esc(l.gymId) + '"><span class="live-dot"></span>' +
+        avatarHtml(l.user) +
+        '<span class="live-text"><strong>' + esc(String(l.user.name).split(" ")[0]) + '</strong> is at <strong>' +
+          esc(l.gym.name) + '</strong> &middot; ' + esc(sinceShort(l.at)) + '</span>' +
+        '<span class="chevron">&rsaquo;</span></button>';
+    }).join("");
+    el.innerHTML = html;
+    el.hidden = !html;
+    var stop = el.querySelector("#home-live-stop");
+    if (stop) stop.addEventListener("click", stopLive);
+    el.querySelectorAll("[data-live-gym]").forEach(function (row) {
+      row.addEventListener("click", function () { openGymModal(row.getAttribute("data-live-gym")); });
+    });
+  }
+
+  function liveBlockHtml() {
+    if (!currentUser()) return "";
+    return '<div class="setting-block">' +
+      '<div class="switch-row">' +
+        '<label class="field-label" for="live-switch" style="margin:0;">Show friends when I’m at the gym</label>' +
+        '<button class="switch" id="live-switch" role="switch" aria-checked="' +
+          (state.settings.shareLive ? "true" : "false") + '"><span></span></button>' +
+      '</div>' +
+      '<p class="setting-help">Off unless you turn it on. When you check in to a gym for today’s workout, ' +
+        'friends see you there until you save or cancel it, and never for more than three hours.</p>' +
+    '</div>';
+  }
+
+  function wireLive(el) {
+    var sw = el.querySelector("#live-switch");
+    if (!sw) return;
+    sw.addEventListener("click", function () {
+      if (sw.getAttribute("aria-checked") === "true") {
+        stopLive();
+        state.settings.shareLive = false;
+        persist();
+        liveQueue = liveQueue.then(function () { return clearPresence(); }).catch(function () { /* it expires on its own */ });
+        renderSettings();
+        showToast("Off. Friends won’t see when you’re at the gym.");
+        return;
+      }
+      sw.disabled = true;
+      // clearing first does two jobs: it proves this database can do it, and
+      // it starts from a clean slate
+      clearPresence().then(function (ok) {
+        if (!ok) {
+          showToast("This needs a database update first: run supabase/009_social.sql.");
+          renderSettings();
+          return;
+        }
+        state.settings.shareLive = true;
+        persist();
+        renderSettings();
+        showToast("On. Friends see you when you check in for today’s workout.");
+      }, function () {
+        showToast("Couldn’t turn that on. Check your connection.");
+        renderSettings();
+      });
+    });
+  }
+
   /* Right after a save is when a nudge makes sense: you just logged, and
      notifications are how you'd hear that a friend did. Asked at most once
      a week, and never once they're on, blocked, or impossible here. */
@@ -1460,6 +1700,9 @@ import {
     if (params.get("friends") || params.get("inbox")) {
       activateTab("friends");
       if (authResolved) openInbox(); else pendingInbox = true;
+    } else if (params.get("recap")) {
+      activateTab("home");
+      openRecap();
     } else if (wid) {
       activateTab("friends");
       if (state.workouts.some(function (w) { return w.id === wid; })) openWorkoutDetail(wid);
@@ -1979,10 +2222,12 @@ import {
         : streak.inPeriod + " of " + streak.goal +
           (streak.mode === "weekly" ? " this week." : " in the last " + streak.days + " days.")) +
       '</p>' +
-      '<button class="btn btn-primary btn-block" id="summary-done" style="margin-top:16px;">Done</button>';
+      '<button class="btn btn-primary btn-block" id="summary-done" style="margin-top:16px;">Done</button>' +
+      '<button class="btn btn-ghost btn-block" id="summary-share" style="margin-top:8px;">Share as a picture</button>';
 
     var el = openListSheet("Nice work", html);
     el.querySelector("#summary-done").addEventListener("click", closeListSheet);
+    el.querySelector("#summary-share").addEventListener("click", function () { openShareCard(workout.id); });
 
     // Numbers tick up rather than just appearing.
     el.querySelectorAll("[data-count]").forEach(function (node) {
@@ -2089,6 +2334,7 @@ import {
                exCount + (exCount === 1 ? " exercise" : " exercises")]
                 .concat(sessionFacts(row.wk).map(esc))
                 .concat(gymObj ? [esc(gymLabel(gymObj))] : [])
+                .concat(withText(row.wk) ? [esc(withText(row.wk))] : [])
                 .join(' &middot; ') +
             '</span>' +
           '</span>' +
@@ -2277,7 +2523,29 @@ import {
   /* Starts today's workout as a copy: same exercises and equipment, every
      set filled in (lighter, like a suggestion) with that workout's numbers.
      A friend's exercises are matched to yours by name. */
-  function startReuse(wk) {
+  /* A tag you've answered (added or dismissed) stops offering its buttons.
+     Kept in settings so it's settled on your other phone too; only tags
+     still in the Inbox are remembered, so the list can't grow forever. */
+  function settleTag(workoutId) {
+    var live = {};
+    (state.inbox || []).forEach(function (it) { if (it.kind === "tag") live[it.workoutId] = true; });
+    var done = {};
+    Object.keys(state.settings.tagsDone || {}).forEach(function (id) { if (live[id]) done[id] = true; });
+    done[workoutId] = true;
+    state.settings.tagsDone = done;
+    persist();
+  }
+
+  /* "Add to my log" on a workout a friend tagged you in: the same session,
+     so it keeps their date, time and gym, tags them back along with anyone
+     else who was there, and fills in their numbers as a starting point. */
+  function addTaggedToLog(workoutId) {
+    var wk = workoutById(workoutId);
+    if (!wk) return;
+    startReuse(wk, { sameSession: true });
+  }
+
+  function startReuse(wk, opts) {
     var go = function () {
       var mine = wk.userId === state.me.id;
       resetDraft();
@@ -2316,11 +2584,25 @@ import {
         if (blk.superset) out.superset = blk.superset;
         return out;
       }).filter(Boolean);
+      if (opts && opts.sameSession) {
+        draft.date = dateInputValue(wk.performedAt);
+        draft.startTime = timeInputValue(wk.performedAt);
+        draft.endTime = wk.endedAt ? timeInputValue(wk.endedAt) : "";
+        var theirGym = wk.gymId ? knownGym(wk.gymId) : null;
+        if (theirGym) draft.gymId = adoptGym(theirGym).id;
+        var friendIds = friendsOf(state.me.id).map(function (u) { return u.id; });
+        draft.withIds = [wk.userId].concat(wk.withIds || []).filter(function (id, i, all) {
+          return id !== state.me.id && friendIds.indexOf(id) !== -1 && all.indexOf(id) === i;
+        });
+      }
       persist();
       closeListSheet();
       activateTab("log");
       renderLog();
-      showToast("Reusing \u201c" + (wk.title || "Workout") + "\u201d \u2014 type over any number to change it.");
+      showToast(opts && opts.sameSession
+        ? "Added from " + ((findUser(wk.userId) || {}).name || "your friend").split(" ")[0] +
+          "’s workout — change anything that was different for you."
+        : "Reusing “" + (wk.title || "Workout") + "” — type over any number to change it.");
     };
     saveDraft();
     if (draft.exercises && draft.exercises.length) { closeListSheet(); openDraftChoice("today", go); return; }
@@ -2537,7 +2819,9 @@ import {
   function inboxActivity() {
     if (!currentUser()) return [];
     return (state.inbox || []).filter(function (it) {
-      if (it.kind !== "reaction") return true;
+      // reactions, comments and tags point at a workout: skip any whose
+      // workout has since been deleted
+      if (!it.workoutId) return true;
       return state.workouts.some(function (w) { return w.id === it.workoutId; });
     });
   }
@@ -2604,24 +2888,40 @@ import {
       var u = findPerson(it.userId) || { id: it.userId, name: "Someone" };
       if (u.handle) knownPeople[u.id] = u;
       var name = '<strong>' + esc(u.name) + '</strong>';
-      var text, target;
+      var text, target, extra = "";
       if (it.kind === "reaction") {
         var wk = state.workouts.filter(function (w) { return w.id === it.workoutId; })[0];
         text = name + ' <span class="inbox-emoji">' + esc(oneEmoji(it.emoji) || "❤️") + '</span> your ' +
           '<strong>' + esc(wk.title || "workout") + '</strong>';
         target = ' data-inbox-wk="' + esc(it.workoutId) + '"';
+      } else if (it.kind === "comment") {
+        var cwk = workoutById(it.workoutId);
+        text = name + ' commented on your <strong>' + esc(cwk.title || "workout") + '</strong>' +
+          '<span class="inbox-quote">“' + esc(it.text || "") + '”</span>';
+        target = ' data-inbox-wk="' + esc(it.workoutId) + '"';
+      } else if (it.kind === "tag") {
+        var twk = workoutById(it.workoutId);
+        text = name + ' tagged you in <strong>' + esc(twk.title || "a workout") + '</strong>';
+        target = ' data-inbox-wk="' + esc(it.workoutId) + '"';
+        // one tap puts it in your own log; either answer settles it
+        if (!(state.settings.tagsDone || {})[it.workoutId]) {
+          extra = '<div class="inbox-acts">' +
+            '<button class="manage-act is-primary" data-tag-add="' + esc(it.workoutId) + '">Add to my log</button>' +
+            '<button class="manage-act" data-tag-skip="' + esc(it.workoutId) + '">Dismiss</button>' +
+          '</div>';
+        }
       } else {
         text = it.kind === "accepted" ? name + ' accepted your request' : 'You and ' + name + ' are friends';
         target = ' data-profile="' + esc(u.id) + '"';
       }
-      return '<button class="inbox-row' + (it.at && it.at > seen ? " is-new" : "") + '"' + target + '>' +
+      return '<button class="inbox-row' + (it.at && it.at > seen ? " is-new" : "") + (extra ? " has-acts" : "") + '"' + target + '>' +
         '<span class="profile-tap" data-profile="' + esc(u.id) + '">' + avatarHtml(u) + '</span>' +
         '<span class="inbox-text">' + text + '</span>' +
         '<span class="inbox-when">' + esc(agoShort(it.at)) + '</span>' +
-      '</button>';
+      '</button>' + extra;
     }).join("") : '<div class="empty-state">' + (requests.length
       ? "Nothing else yet."
-      : "Nothing yet. Friend requests and reactions to your workouts show up here.") + '</div>';
+      : "Nothing yet. Friend requests, reactions, comments and tags show up here.") + '</div>';
     return html + '</div>';
   }
 
@@ -2644,6 +2944,15 @@ import {
     el.innerHTML = inboxHtml(seen);
     el.querySelectorAll("[data-inbox-wk]").forEach(function (b) {
       b.addEventListener("click", function () { openWorkoutDetail(b.getAttribute("data-inbox-wk")); });
+    });
+    el.querySelectorAll("[data-tag-add], [data-tag-skip]").forEach(function (b) {
+      b.addEventListener("click", function () {
+        var add = b.hasAttribute("data-tag-add");
+        var id = b.getAttribute(add ? "data-tag-add" : "data-tag-skip");
+        settleTag(id);
+        if (add) addTaggedToLog(id);
+        else if (inboxIsOpen()) drawInbox(el, seen);
+      });
     });
     el.querySelectorAll("[data-act]").forEach(function (btn) {
       btn.onclick = function () {
@@ -2695,7 +3004,105 @@ import {
 
   /* What you get when you tap a session: the whole thing laid out to be read,
      or handed to someone. Editing is a button, not what tapping does. */
-  function openWorkoutDetail(workoutId) {
+  function detailIsOpen(workoutId) {
+    var head = document.querySelector("#list-modal-body [data-detail-id]");
+    return !!head && head.getAttribute("data-detail-id") === workoutId &&
+      document.getElementById("list-modal-overlay").classList.contains("open");
+  }
+
+  /* The thread under a workout. Anyone who can see the workout can read it;
+     writing takes being the owner or a friend (the database enforces the
+     same rule, this just doesn't offer a box that would be refused). */
+  function commentsHtml(wk) {
+    if (!featureOn("comments")) return "";
+    var mine = wk.userId === state.me.id;
+    var canWrite = mine || relationTo(wk.userId) === "friend";
+    var list = wk.comments || [];
+    if (!list.length && !canWrite) return "";
+    return '<div class="comments">' +
+      '<div class="manage-head">Comments' + (list.length ? " (" + list.length + ")" : "") + '</div>' +
+      list.map(function (c) {
+        var isMe = c.userId === state.me.id;
+        var u = isMe ? state.me : (findPerson(c.userId) || { id: c.userId, name: "Someone" });
+        return '<div class="comment' + (c.pending ? " is-pending" : "") + '">' +
+          '<span class="profile-tap" data-profile="' + esc(c.userId) + '">' + avatarHtml(u) + '</span>' +
+          '<div class="comment-body">' +
+            '<div class="comment-meta">' +
+              '<span class="comment-name">' + esc(isMe ? "You" : u.name) + '</span>' +
+              '<span class="comment-when">' + esc(c.pending ? "sending…" : agoShort(c.at)) + '</span>' +
+              ((isMe || mine) && !c.pending
+                ? '<button class="comment-del" data-comment-del="' + esc(c.id) + '">Delete</button>' : '') +
+            '</div>' +
+            '<div class="comment-text">' + esc(c.body) + '</div>' +
+          '</div>' +
+        '</div>';
+      }).join("") +
+      (canWrite
+        ? '<form class="comment-box" id="comment-form">' +
+            '<input type="text" id="comment-input" maxlength="500" placeholder="Add a comment…" ' +
+              'autocomplete="off" enterkeyhint="send" aria-label="Add a comment">' +
+            '<button type="submit" class="comment-send" aria-label="Post comment">' + SEND_SVG + '</button>' +
+          '</form>'
+        : '') +
+    '</div>';
+  }
+
+  function wireComments(el, workoutId) {
+    var redraw = function () {
+      if (detailIsOpen(workoutId)) openWorkoutDetail(workoutId);
+      renderFriends();
+      renderHomeDay();
+    };
+    var form = el.querySelector("#comment-form");
+    if (form) form.addEventListener("submit", function (e) {
+      e.preventDefault();
+      var text = el.querySelector("#comment-input").value.trim();
+      var wk = workoutById(workoutId);
+      if (!text || !wk) return;
+      // shown straight away, greyed until the database has it
+      var pending = { id: "pending-" + Date.now(), userId: state.me.id, body: text,
+                      at: new Date().toISOString(), pending: true };
+      (wk.comments = wk.comments || []).push(pending);
+      redraw();
+      addComment(workoutId, text).then(function (saved) {
+        // a sync may have swapped the workout object underneath us: look it up again
+        var now = workoutById(workoutId);
+        if (!now) return;
+        now.comments = (now.comments || []).filter(function (c) { return c.id !== pending.id && c.id !== saved.id; });
+        now.comments.push(saved);
+        persist();
+        redraw();
+      }, function (err) {
+        var now = workoutById(workoutId);
+        if (now) now.comments = (now.comments || []).filter(function (c) { return c.id !== pending.id; });
+        redraw();
+        showToast((err && err.message) || "Couldn’t post that.");
+        var box = document.querySelector("#list-modal-body #comment-input");
+        if (box && detailIsOpen(workoutId)) box.value = text;     // don't make them type it again
+      });
+    });
+    el.querySelectorAll("[data-comment-del]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var id = btn.getAttribute("data-comment-del");
+        var wk = workoutById(workoutId);
+        if (!wk) return;
+        var gone = (wk.comments || []).filter(function (c) { return c.id === id; })[0];
+        wk.comments = (wk.comments || []).filter(function (c) { return c.id !== id; });
+        redraw();
+        deleteComment(id).then(function () { persist(); }, function (err) {
+          var now = workoutById(workoutId);
+          if (now && gone) {
+            now.comments = (now.comments || []).concat([gone])
+              .sort(function (a, b) { return String(a.at).localeCompare(String(b.at)); });
+          }
+          redraw();
+          showToast((err && err.message) || "Couldn’t delete that.");
+        });
+      });
+    });
+  }
+
+  function openWorkoutDetail(workoutId, opts) {
     var wk = state.workouts.filter(function (w) { return w.id === workoutId; })[0];
     if (!wk) return;
     var mine = wk.userId === state.me.id;
@@ -2722,8 +3129,9 @@ import {
     var ssLabels = supersetLabels(wk.exercises);
 
     var who = mine ? null : findUser(wk.userId);
+    var together = withPeople(wk);
     var html =
-      '<div class="detail-head">' +
+      '<div class="detail-head" data-detail-id="' + esc(workoutId) + '">' +
         (who
           ? '<div class="detail-who" data-profile="' + esc(who.id) + '">' + avatarHtml(who) +
             '<span>' + esc(who.name) + '</span><span class="chevron">&rsaquo;</span></div>'
@@ -2737,6 +3145,11 @@ import {
               '<span class="chevron">&rsaquo;</span></span>' +
             (gymAddress(gymObj) ? '<span class="detail-gym-addr">' + esc(gymAddress(gymObj)) + '</span>' : '') +
             '</div>'
+          : '') +
+        (together.length
+          ? '<div class="detail-with"><span class="avatar-stack is-mid">' + together.slice(0, 5).map(function (u) {
+              return '<span class="profile-tap" data-profile="' + esc(u.id) + '">' + avatarHtml(u) + '</span>';
+            }).join("") + '</span><span>' + esc(withText(wk).replace(/^w/, "W")) + '</span></div>'
           : '') +
       '</div>';
 
@@ -2770,12 +3183,17 @@ import {
 
     if (mine) {
       html += reactorsHtml(wk);
+      html += commentsHtml(wk);
       html += '<button class="btn btn-ghost btn-block" id="detail-edit" style="margin-top:18px;">Edit workout</button>';
     } else {
-      html += '<div class="detail-react">' + reactionBarHtml(wk) + '</div>';
+      // the bar's own speech bubble would only reopen this sheet, so it's left off here
+      html += '<div class="detail-react">' +
+        reactionBarHtml(wk).replace(/<button class="react comment-chip"[\s\S]*?<\/button>/, "") + '</div>';
+      html += commentsHtml(wk);
     }
     html += '<button class="btn btn-ghost btn-block" id="detail-reuse" style="margin-top:' + (mine ? 8 : 16) + 'px;">' +
       (mine ? "Reuse this workout" : "Do this workout") + '</button>';
+    if (mine) html += '<button class="btn btn-ghost btn-block" id="detail-share" style="margin-top:8px;">Share as a picture</button>';
 
     var el = openListSheet("Workout", html);
     var gymLink = el.querySelector("[data-gym-open]");
@@ -2784,6 +3202,14 @@ import {
       openGymModal(gymLink.getAttribute("data-gym-open"));
     });
     el.querySelector("#detail-reuse").addEventListener("click", function () { startReuse(wk); });
+    wireComments(el, workoutId);
+    var shareBtn = el.querySelector("#detail-share");
+    if (shareBtn) shareBtn.addEventListener("click", function () { openShareCard(workoutId); });
+    if (opts && opts.comment) {
+      // came in through the speech bubble: bring the thread into view
+      var thread = el.querySelector(".comments");
+      if (thread && thread.scrollIntoView) thread.scrollIntoView({ block: "nearest" });
+    }
     if (mine) {
       el.querySelector("#detail-edit").addEventListener("click", function () {
         closeListSheet();
@@ -3152,6 +3578,7 @@ import {
   document.getElementById("profile-progress").addEventListener("click", function () {
     activateTab("progress");
   });
+  document.getElementById("profile-recap").addEventListener("click", function () { openRecap(); });
 
   /* ----------------------------- feed ----------------------------- */
 
@@ -3318,6 +3745,7 @@ import {
   }
 
   function resetDraft() {
+    stopLive();               // saved, cancelled or started over: you're no longer "at the gym"
     draft = freshDraft();
     ["log-title", "log-calories"].forEach(function (id) {
       var el = document.getElementById(id);
@@ -3375,6 +3803,7 @@ import {
       startTime: saved.startTime || timeInputValue(new Date().toISOString()),
       endTime: saved.endTime || "",
       photoData: saved.photoData || null,
+      withIds: Array.isArray(saved.withIds) ? saved.withIds : [],
       exercises: saved.exercises
     };
     return true;
@@ -4089,6 +4518,8 @@ import {
     document.getElementById("reuse-btn").hidden =
       cardio || !myWorkouts().length || !!(draft.exercises && draft.exercises.length);
     document.getElementById("log-gym").innerHTML = gymOptionsHtml(draft.gymId);
+    renderLogLive();
+    renderLogWith();
     document.getElementById("log-date").value = draft.date;
     document.getElementById("log-start").value = draft.startTime;
     document.getElementById("log-end").value = draft.endTime || "";
@@ -4099,6 +4530,68 @@ import {
       function (d) { draft.photoData = d; saveDraft(); });
     wireLogEvents();
     saveDraft();
+  }
+
+  /* ---- who you trained with ----
+     Friends only (that's who the database lets you tag), and only shown
+     when you have some. They hear about it in their Inbox, with a button
+     to add the same workout to their own log. */
+  function renderLogWith() {
+    var field = document.getElementById("log-with-field");
+    var friends = featureOn("tags") ? friendsOf(state.me.id) : [];
+    field.hidden = !friends.length;
+    if (!friends.length) return;
+    // anyone no longer a friend quietly drops off
+    draft.withIds = (draft.withIds || []).filter(function (id) {
+      return friends.some(function (u) { return u.id === id; });
+    });
+    var box = document.getElementById("log-with");
+    box.innerHTML = draft.withIds.map(function (id) {
+      var u = findUser(id);
+      return '<button type="button" class="with-chip" data-untag="' + esc(id) + '" aria-label="Remove ' + esc(u.name) + '">' +
+        avatarHtml(u) + '<span>' + esc(u.name.split(" ")[0]) + '</span><span class="with-x" aria-hidden="true">&times;</span></button>';
+    }).join("") + '<button type="button" class="with-add" id="log-with-add">+ Tag a friend</button>';
+    box.querySelectorAll("[data-untag]").forEach(function (chip) {
+      chip.addEventListener("click", function () {
+        var id = chip.getAttribute("data-untag");
+        draft.withIds = draft.withIds.filter(function (x) { return x !== id; });
+        renderLogWith();
+        saveDraft();
+      });
+    });
+    box.querySelector("#log-with-add").addEventListener("click", openTagPicker);
+  }
+
+  function openTagPicker() {
+    var friends = friendsOf(state.me.id);
+    var el = openListSheet("Who did you train with?", "");
+    var draw = function () {
+      el.innerHTML = friends.map(function (u) {
+        var on = (draft.withIds || []).indexOf(u.id) !== -1;
+        return '<button class="tag-row' + (on ? " is-on" : "") + '" data-tag-toggle="' + esc(u.id) + '" aria-pressed="' + on + '">' +
+          avatarHtml(u) +
+          '<span class="person-body"><span class="person-name">' + esc(u.name) + '</span>' +
+            '<span class="person-sub">@' + esc(u.handle || "") + '</span></span>' +
+          '<span class="tag-check" aria-hidden="true">' + (on ? "✓" : "") + '</span>' +
+        '</button>';
+      }).join("") +
+      '<p class="setting-help">They’ll get it in their Inbox and can add the workout to their own log.</p>' +
+      '<button class="btn btn-primary btn-block" id="tag-done" style="margin-top:12px;">Done</button>';
+      el.querySelectorAll("[data-tag-toggle]").forEach(function (row) {
+        row.addEventListener("click", function () {
+          var id = row.getAttribute("data-tag-toggle");
+          var list = draft.withIds || [];
+          draft.withIds = list.indexOf(id) === -1 ? list.concat([id]) : list.filter(function (x) { return x !== id; });
+          draw();
+        });
+      });
+      el.querySelector("#tag-done").addEventListener("click", function () {
+        closeListSheet();
+        renderLogWith();
+        saveDraft();
+      });
+    };
+    draw();
   }
 
   /* Cancel leaves the log screen. With nothing typed it just goes back;
@@ -4116,8 +4609,17 @@ import {
   });
 
   function wireLogEvents() {
-    document.getElementById("log-gym").onchange = function (e) { draft.gymId = e.target.value; };
-    document.getElementById("log-date").onchange = function (e) { draft.date = e.target.value; };
+    document.getElementById("log-gym").onchange = function (e) {
+      draft.gymId = e.target.value;
+      // choosing a gym for today's workout is the check-in
+      if (draft.gymId) startLive(draft.gymId); else stopLive();
+      renderLogLive();
+    };
+    document.getElementById("log-date").onchange = function (e) {
+      draft.date = e.target.value;
+      if (draft.date !== todayInput()) stopLive();     // logging another day isn't being there now
+      renderLogLive();
+    };
     document.getElementById("log-start").onchange = function (e) {
       draft.startTime = e.target.value; updateDurationReadout("log", draft);
     };
@@ -4128,6 +4630,7 @@ import {
     document.getElementById("add-gym-btn").onclick = function () {
       openGymFinder(function (g) {
         draft.gymId = g.id;              // picking one from here checks you in
+        startLive(g.id);
         renderLog();
         showToast("Checked in at " + gymLabel(g) + ".");
       });
@@ -4167,6 +4670,7 @@ import {
         exercises: cleanExercises
       };
       if (draft.photoData) workout.photoData = draft.photoData;
+      if (featureOn("tags") && draft.withIds && draft.withIds.length) workout.withIds = draft.withIds.slice();
       state.workouts.push(workout);
       persist();
       titleInput.value = "";
@@ -5187,6 +5691,8 @@ import {
   function placeRowHtml(r) {
     var g = r.gym;
     var bits = [];
+    var here = liveFriends().filter(function (l) { return l.gymId === g.id; }).length;
+    if (here) bits.push('<span class="live-dot"></span>' + here + ' here now');
     if (r.friends.length) {
       bits.push('<span class="avatar-stack">' + r.friends.slice(0, 3).map(function (u) {
         return avatarHtml(u);
@@ -5524,7 +6030,22 @@ import {
           '<div class="stat-tile"><span class="num">' + esc(calendarDate(sessions[0].performedAt).split(",")[1].trim()) +
             '</span><span class="label">Last visit</span></div>' +
         '</div>';
+        html += visitBadgesHtml(sessions.length);
       }
+
+      // ---- who's here right now (friends who chose to share it) ----
+      var hereNow = liveFriends().filter(function (l) { return l.gymId === gymId; });
+      if (hereNow.length) {
+        html += '<div class="manage-head"><span class="live-dot"></span>Here now</div>' +
+          hereNow.map(function (l) {
+            return '<div class="gym-here" data-profile="' + esc(l.user.id) + '">' + avatarHtml(l.user) +
+              '<span class="gym-friends-text">' + esc(l.user.name) + '</span>' +
+              '<span class="gym-here-when">' + esc(sinceShort(l.at)) + '</span></div>';
+          }).join("");
+      }
+
+      // ---- regulars: you and your friends, this month ----
+      html += regularsHtml(gymId);
 
       // ---- friends, by name ----
       var friends = friendsAtGyms()[gymId];
@@ -5627,6 +6148,66 @@ import {
     });
   }
 
+  /* ---- regulars and crowns ----
+     A monthly board for each gym, among you and your friends only -- the
+     same people whose workouts you can already see. Most sessions this
+     calendar month wears the crown; a tie shares it. */
+  var CROWN_SVG = '<svg class="crown" viewBox="0 0 24 24" aria-hidden="true">' +
+    '<path d="M3.2 8.2 7.6 12 12 5l4.4 7 4.4-3.8-1.7 9.6H4.9z"/></svg>';
+  var VISIT_BADGES = [5, 10, 25, 50, 100, 250, 500];
+
+  function gymRegulars(gymId) {
+    var now = new Date();
+    var monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+    var rows = [{ user: state.me, isMe: true }].concat(friendsOf(state.me.id).map(function (u) {
+      return { user: u, isMe: false };
+    })).map(function (r) {
+      r.n = workoutsOf(r.user.id).filter(function (w) {
+        return w.gymId === gymId && new Date(w.performedAt).getTime() >= monthStart;
+      }).length;
+      return r;
+    }).filter(function (r) { return r.n > 0; });
+    rows.sort(function (a, b) {
+      return (b.n - a.n) || (b.isMe - a.isMe) || String(a.user.name).localeCompare(String(b.user.name));
+    });
+    rows.forEach(function (r, i) {
+      // equal sessions, equal rank
+      r.rank = i && rows[i - 1].n === r.n ? rows[i - 1].rank : i + 1;
+    });
+    return rows;
+  }
+
+  function regularsHtml(gymId) {
+    if (!friendsOf(state.me.id).length) return "";      // a board of one isn't a board
+    var rows = gymRegulars(gymId);
+    if (!rows.length) return "";
+    return '<div class="manage-head">Regulars <span class="head-note">' +
+        MONTHS_LONG[new Date().getMonth()] + ', you and friends</span></div>' +
+      rows.slice(0, 8).map(function (r) {
+        return '<div class="regular' + (r.isMe ? " is-me" : "") + '"' +
+            (r.isMe ? '' : ' data-profile="' + esc(r.user.id) + '"') + '>' +
+          '<span class="regular-rank">' + (r.rank === 1 ? CROWN_SVG + '<span class="sr-only">First place</span>' : r.rank) + '</span>' +
+          avatarHtml(r.user) +
+          '<span class="regular-name">' + esc(r.isMe ? "You" : r.user.name) + '</span>' +
+          '<span class="regular-n num">' + r.n + (r.n === 1 ? " session" : " sessions") + '</span>' +
+        '</div>';
+      }).join("");
+  }
+
+  /* Visit badges are yours alone: the app has your whole history but only
+     the last few months of a friend's, so theirs couldn't be counted fairly. */
+  function visitBadgesHtml(visits) {
+    var earned = VISIT_BADGES.filter(function (n) { return visits >= n; });
+    var next = VISIT_BADGES.filter(function (n) { return visits < n; })[0];
+    if (!earned.length && !next) return "";
+    return '<div class="badges">' +
+      earned.slice(-3).map(function (n) {
+        return '<span class="badge is-earned">' + n + ' visits</span>';
+      }).join("") +
+      (next ? '<span class="badge">' + next + ' visits <span class="badge-togo">' + (next - visits) + ' to go</span></span>' : '') +
+    '</div>';
+  }
+
   function saveMovedPin() {
     var id = openGymId;
     var g = knownGym(id);
@@ -5662,6 +6243,7 @@ import {
     closeGymModal();
     if (!draftHasContent(draft)) resetDraft();      // a clean form, dated now
     draft.gymId = mine.id;
+    startLive(mine.id);
     activateTab("log");
     showToast("Checked in at " + gymLabel(mine) + ".");
   }
@@ -5716,6 +6298,9 @@ import {
     }).join("");
 
     renderGoalBar(me.id);
+    renderHomeLive();
+    renderHomeRecap();
+    if (currentUser()) refreshSocial(false);      // throttled; keeps "at the gym now" fresh
 
     document.querySelectorAll("#profile-stats [data-stat]").forEach(function (tile) {
       tile.addEventListener("click", function () { activateTab(tile.getAttribute("data-stat")); });
@@ -6144,6 +6729,462 @@ import {
     }, 300);
   });
 
+  /* ----------------------------- share card ----------------------------- */
+
+  /* A workout as a picture, sized for an Instagram Story (1080 x 1920): the
+     title, where and when, the headline numbers, and either the records it
+     set or what was trained. Drawn on a canvas, so it never leaves the phone
+     until you share it. The card has one look in both themes -- it's going
+     somewhere else, not sitting inside the app. */
+  var CARD_W = 1080;
+  var CARD_H = 1920;
+  var CARD_FONT = '"Inter", -apple-system, "Segoe UI", sans-serif';
+  var shareUrl = null;            // the picture currently on screen, so the old one can be released
+
+  function cardFont(weight, size) {
+    return weight + " " + size + "px " + CARD_FONT;
+  }
+
+  /* Shortens text with an ellipsis until it fits. */
+  function fitText(ctx, text, maxWidth) {
+    text = String(text);
+    if (ctx.measureText(text).width <= maxWidth) return text;
+    while (text.length > 1 && ctx.measureText(text + "…").width > maxWidth) text = text.slice(0, -1);
+    return text.replace(/\s+$/, "") + "…";
+  }
+
+  /* Breaks text into at most maxLines lines; the last one is shortened to fit. */
+  function wrapText(ctx, text, maxWidth, maxLines) {
+    var words = String(text).split(/\s+/).filter(Boolean);
+    var lines = [];
+    var line = "";
+    words.forEach(function (w) {
+      var next = line ? line + " " + w : w;
+      if (!line || ctx.measureText(next).width <= maxWidth) line = next;
+      else { lines.push(line); line = w; }
+    });
+    if (line) lines.push(line);
+    if (lines.length > maxLines) {
+      lines = lines.slice(0, maxLines - 1).concat([lines.slice(maxLines - 1).join(" ")]);
+    }
+    return lines.map(function (l) { return fitText(ctx, l, maxWidth); });
+  }
+
+  function roundedRect(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  /* The headline numbers, most telling first: at most three. */
+  function cardTiles(wk) {
+    var tiles = [];
+    var secs = durationOf(wk), logged = loggedSetTime(wk.exercises);
+    if (secs) tiles.push([formatDurationLong(secs), "Duration"]);
+    else if (logged) tiles.push([formatDuration(logged), "Time"]);
+    var dist = sessionDistance(wk.exercises);
+    if (dist.mi) tiles.push([String(Math.round(dist.mi * 100) / 100), "Miles"]);
+    else if (dist.km) tiles.push([String(Math.round(dist.km * 100) / 100), "Km"]);
+    var vol = sessionVolume(wk.exercises);
+    if (vol.lb) tiles.push([Math.round(vol.lb).toLocaleString(), "Lb lifted"]);
+    else if (vol.kg) tiles.push([Math.round(vol.kg).toLocaleString(), "Kg lifted"]);
+    var sets = repSetCount(wk.exercises);
+    if (sets) tiles.push([String(sets), sets === 1 ? "Set" : "Sets"]);
+    if (wk.calories != null) tiles.push([String(wk.calories), "Calories"]);
+    if (!tiles.length) tiles.push([String(wk.exercises.length), wk.exercises.length === 1 ? "Exercise" : "Exercises"]);
+    return tiles.slice(0, 3);
+  }
+
+  /* The workout's photo, if it has one and the browser will let a canvas
+     use it. Resolves to null rather than failing: the card works without. */
+  function loadCardPhoto(wk) {
+    var src = photoSrc(wk);
+    if (!src) return Promise.resolve(null);
+    return new Promise(function (resolve) {
+      var img = new Image();
+      var done = function (v) { clearTimeout(timer); resolve(v); };
+      var timer = setTimeout(function () { done(null); }, 5000);
+      if (!/^data:/.test(src)) img.crossOrigin = "anonymous";
+      img.onload = function () { done(img); };
+      img.onerror = function () { done(null); };
+      img.src = src;
+    });
+  }
+
+  function cardFontsReady() {
+    if (!document.fonts || !document.fonts.load) return Promise.resolve();
+    var wait = Promise.all(["800 100px Inter", "700 40px Inter", "600 40px Inter", "500 40px Inter"]
+      .map(function (f) { return document.fonts.load(f); })).catch(function () { /* system font instead */ });
+    // never hold the card up for a font
+    return Promise.race([wait, new Promise(function (r) { setTimeout(r, 1500); })]);
+  }
+
+  /* Painted twice when there's no photo: once to find out how tall the
+     content is, then again nudged down so a short workout sits in the
+     middle of the card instead of leaving the bottom half empty. */
+  function paintWorkoutCard(wk, photo) {
+    if (photo) return paintCard(wk, photo, 0).canvas;
+    var first = paintCard(wk, null, 0);
+    var spare = (CARD_H - 190) - first.endY;
+    return spare > 160 ? paintCard(wk, null, Math.round(spare * 0.42)).canvas : first.canvas;
+  }
+
+  function paintCard(wk, photo, shift) {
+    var canvas = document.createElement("canvas");
+    canvas.width = CARD_W;
+    canvas.height = CARD_H;
+    var ctx = canvas.getContext("2d");
+    var PAD = 84;
+    var inner = CARD_W - PAD * 2;
+    var WHITE = "#ffffff", SOFT = "rgba(255,255,255,0.72)", FAINT = "rgba(255,255,255,0.5)";
+    var BLUE = "#4d94ff", GOLD = "#f0c04a";
+
+    // ---- background ----
+    var bg = ctx.createLinearGradient(0, 0, 0, CARD_H);
+    bg.addColorStop(0, "#0b1222");
+    bg.addColorStop(0.55, "#101d38");
+    bg.addColorStop(1, "#0a0f1c");
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, CARD_W, CARD_H);
+
+    var top = 400;
+    if (photo) {
+      // the photo fills the top of the card and fades into the background
+      var ph = Math.round(CARD_H * 0.5);
+      var scale = Math.max(CARD_W / photo.width, ph / photo.height);
+      var dw = photo.width * scale, dh = photo.height * scale;
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, 0, CARD_W, ph);
+      ctx.clip();
+      ctx.drawImage(photo, (CARD_W - dw) / 2, (ph - dh) / 2, dw, dh);
+      ctx.restore();
+      var fade = ctx.createLinearGradient(0, 0, 0, ph);
+      fade.addColorStop(0, "rgba(11,18,34,0.55)");
+      fade.addColorStop(0.35, "rgba(11,18,34,0.05)");
+      fade.addColorStop(1, "#0f1b34");
+      ctx.fillStyle = fade;
+      ctx.fillRect(0, 0, CARD_W, ph + 2);
+      top = ph + 60;
+    } else {
+      var glow = ctx.createRadialGradient(CARD_W * 0.85, 190, 0, CARD_W * 0.85, 190, 760);
+      glow.addColorStop(0, "rgba(47,124,246,0.42)");
+      glow.addColorStop(1, "rgba(47,124,246,0)");
+      ctx.fillStyle = glow;
+      ctx.fillRect(0, 0, CARD_W, 1000);
+    }
+
+    // ---- wordmark ----
+    ctx.textBaseline = "alphabetic";
+    ctx.textAlign = "left";
+    ctx.font = cardFont(800, 56);
+    ctx.fillStyle = WHITE;
+    ctx.fillText("Gym", PAD, 160);
+    ctx.fillStyle = BLUE;
+    ctx.fillText("Social", PAD + ctx.measureText("Gym").width, 160);
+
+    var y = top + shift;
+    var prs = prsAt(wk);
+
+    // ---- records ribbon ----
+    if (prs.length) {
+      var ribbon = prs.length === 1 ? "NEW PERSONAL RECORD" : prs.length + " NEW PERSONAL RECORDS";
+      ctx.font = cardFont(700, 32);
+      var rw = ctx.measureText(ribbon).width + 56;
+      ctx.fillStyle = "rgba(240,192,74,0.16)";
+      roundedRect(ctx, PAD, y - 46, rw, 66, 33);
+      ctx.fill();
+      ctx.fillStyle = GOLD;
+      ctx.fillText(ribbon, PAD + 28, y);
+      y += 96;
+    }
+
+    // ---- title ----
+    var firstEx = wk.exercises[0] ? findExercise(wk.exercises[0].exerciseId) : null;
+    var title = wk.title || (isCardioWorkout(wk) && firstEx ? firstEx.name : "Workout");
+    // big and on two lines if it fits; a long title steps down a size and gets a third
+    var titleSize = 112;
+    ctx.font = cardFont(800, titleSize);
+    if (wrapText(ctx, title, inner, 9).length > 2) {
+      titleSize = 86;
+      ctx.font = cardFont(800, titleSize);
+    }
+    ctx.fillStyle = WHITE;
+    wrapText(ctx, title, inner, titleSize === 112 ? 2 : 3).forEach(function (line) {
+      y += titleSize;
+      ctx.fillText(line, PAD, y);
+      y += 12;
+    });
+
+    // ---- where and when ----
+    var gymObj = wk.gymId ? findGym(wk.gymId) : null;
+    var where = [gymObj ? gymObj.name : null, calendarDate(wk.performedAt)].filter(Boolean).join("  ·  ");
+    ctx.font = cardFont(500, 42);
+    ctx.fillStyle = SOFT;
+    y += 62;
+    ctx.fillText(fitText(ctx, where, inner), PAD, y);
+    var together = withText(wk);
+    if (together) {
+      y += 60;
+      ctx.fillText(fitText(ctx, together.replace(/^w/, "W"), inner), PAD, y);
+    }
+
+    // ---- headline numbers ----
+    var tiles = cardTiles(wk);
+    var gap = 24;
+    var tw = (inner - gap * (tiles.length - 1)) / tiles.length;
+    y += 70;
+    tiles.forEach(function (t, i) {
+      var x = PAD + i * (tw + gap);
+      ctx.fillStyle = "rgba(255,255,255,0.08)";
+      roundedRect(ctx, x, y, tw, 210, 28);
+      ctx.fill();
+      ctx.textAlign = "center";
+      ctx.fillStyle = WHITE;
+      ctx.font = cardFont(800, tiles.length === 3 ? 68 : 78);
+      ctx.fillText(fitText(ctx, t[0], tw - 30), x + tw / 2, y + 112);
+      ctx.fillStyle = FAINT;
+      ctx.font = cardFont(600, 30);
+      ctx.fillText(t[1].toUpperCase(), x + tw / 2, y + 166);
+    });
+    ctx.textAlign = "left";
+    y += 210 + 84;
+
+    // ---- the records, or what was trained ----
+    var footerTop = CARD_H - 190;
+    var rows;
+    if (prs.length) {
+      rows = prs.slice(0, 4).map(function (p) { return [p.name, p.display, GOLD]; });
+    } else {
+      rows = wk.exercises.map(function (blk) {
+        var ex = findExercise(blk.exerciseId);
+        return [ex ? ex.name : "Exercise",
+                summarizeSets(blk.sets, metricOf(blk), blk.equipment, ex && ex.name), SOFT];
+      });
+    }
+    var room = Math.max(0, Math.floor((footerTop - y) / 92));
+    var more = rows.length - room;
+    if (more > 0) rows = rows.slice(0, Math.max(0, room - 1));
+    rows.forEach(function (r) {
+      ctx.font = cardFont(600, 40);
+      var rightW = Math.min(ctx.measureText(String(r[1])).width, inner * 0.5);
+      ctx.textAlign = "right";
+      ctx.fillStyle = r[2];
+      ctx.fillText(fitText(ctx, r[1], inner * 0.5), CARD_W - PAD, y);
+      ctx.textAlign = "left";
+      ctx.fillStyle = WHITE;
+      ctx.font = cardFont(700, 42);
+      ctx.fillText(fitText(ctx, r[0], inner - rightW - 40), PAD, y);
+      ctx.fillStyle = "rgba(255,255,255,0.1)";
+      ctx.fillRect(PAD, y + 30, inner, 2);
+      y += 92;
+    });
+    if (more > 0 && room > 0) {
+      ctx.font = cardFont(500, 36);
+      ctx.fillStyle = FAINT;
+      ctx.fillText("+ " + (more + 1) + " more", PAD, y);
+      y += 92;
+    }
+    var endY = y;
+
+    // ---- footer ----
+    ctx.fillStyle = "rgba(255,255,255,0.14)";
+    ctx.fillRect(PAD, CARD_H - 170, inner, 2);
+    ctx.font = cardFont(700, 44);
+    ctx.fillStyle = WHITE;
+    var who = currentUser() && state.me.handle ? "@" + state.me.handle
+      : (state.me.name && state.me.name !== "You" ? state.me.name : "");
+    if (who) ctx.fillText(fitText(ctx, who, inner * 0.55), PAD, CARD_H - 96);
+    ctx.textAlign = "right";
+    ctx.font = cardFont(500, 34);
+    ctx.fillStyle = FAINT;
+    ctx.fillText("Logged on GymSocial", CARD_W - PAD, CARD_H - 96);
+    ctx.textAlign = "left";
+    return { canvas: canvas, endY: endY };
+  }
+
+  function canvasToBlob(canvas) {
+    return new Promise(function (resolve, reject) {
+      try {
+        canvas.toBlob(function (blob) { blob ? resolve(blob) : reject(new Error("empty")); }, "image/png");
+      } catch (err) { reject(err); }       // a photo the browser won't let a canvas export
+    });
+  }
+
+  /* Resolves to a PNG of the card. If the photo turns out to be one the
+     browser refuses to export, the card is made again without it. */
+  function makeWorkoutCard(wk) {
+    return cardFontsReady().then(function () { return loadCardPhoto(wk); }).then(function (photo) {
+      return canvasToBlob(paintWorkoutCard(wk, photo)).catch(function (err) {
+        if (!photo) throw err;
+        return canvasToBlob(paintWorkoutCard(wk, null));
+      });
+    });
+  }
+
+  function openShareCard(workoutId) {
+    var wk = workoutById(workoutId);
+    if (!wk) return;
+    var el = openListSheet("Share", '<div class="share-wait" id="share-root">Making your picture…</div>');
+    makeWorkoutCard(wk).then(function (blob) {
+      if (!document.getElementById("share-root")) return;      // closed, or showing something else by now
+      if (shareUrl) URL.revokeObjectURL(shareUrl);
+      shareUrl = URL.createObjectURL(blob);
+      var name = "gymsocial-" + String(wk.title || "workout").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") + ".png";
+      var file = null;
+      try { file = new File([blob], name, { type: "image/png" }); } catch (e) { /* very old browser */ }
+      var canShare = !!(file && navigator.canShare && navigator.canShare({ files: [file] }));
+      el.innerHTML = '<div id="share-root">' +
+        '<img class="share-img" id="share-img" src="' + shareUrl + '" alt="Picture of ' + esc(wk.title || "your workout") + ' to share">' +
+        (canShare ? '<button class="btn btn-primary btn-block" id="share-go">Share</button>' : '') +
+        '<a class="btn btn-ghost btn-block share-save" id="share-save" href="' + shareUrl + '" download="' + esc(name) + '">Save picture</a>' +
+        '<p class="setting-help">You can also press and hold the picture to save or copy it.</p>' +
+      '</div>';
+      var go = el.querySelector("#share-go");
+      if (go) go.addEventListener("click", function () {
+        navigator.share({ files: [file], title: "GymSocial" }).catch(function () { /* closed the share sheet */ });
+      });
+    }).catch(function () {
+      if (document.getElementById("share-root")) {
+        el.innerHTML = '<div class="empty-state" id="share-root">Couldn’t make the picture. Close this and try again.</div>';
+      }
+    });
+  }
+
+  /* ----------------------------- weekly recap ----------------------------- */
+
+  /* A look back at the last full week (Sunday to Saturday, the same weeks
+     the streak and the calendar use). A card for it sits on Home on Sunday
+     and Monday until it's opened or dismissed; it's always under Profile. */
+  function recapRange() {
+    var end = weekStartOf(new Date());              // this week's Sunday, 12:00 AM
+    var start = new Date(end);
+    start.setDate(start.getDate() - 7);
+    var last = new Date(end);
+    last.setDate(last.getDate() - 1);               // the Saturday
+    var label = MONTHS[start.getMonth()] + " " + start.getDate() + " – " +
+      (last.getMonth() === start.getMonth() ? "" : MONTHS[last.getMonth()] + " ") + last.getDate();
+    return { start: start, end: end, label: label,
+             key: start.getFullYear() + "-" + (start.getMonth() + 1) + "-" + start.getDate() };
+  }
+
+  function buildRecap() {
+    var range = recapRange();
+    var inWeek = function (w) {
+      var t = new Date(w.performedAt).getTime();
+      return t >= range.start.getTime() && t < range.end.getTime();
+    };
+    var mine = myWorkouts().filter(inWeek);
+    var vol = { lb: 0, kg: 0 }, secs = 0, prs = [], gymCount = {};
+    mine.forEach(function (w) {
+      var v = sessionVolume(w.exercises);
+      vol.lb += v.lb;
+      vol.kg += v.kg;
+      secs += durationOf(w) || loggedSetTime(w.exercises) || 0;
+      prsAt(w).forEach(function (p) { prs.push(p); });
+      if (w.gymId) gymCount[w.gymId] = (gymCount[w.gymId] || 0) + 1;
+    });
+    var topGymId = Object.keys(gymCount).sort(function (a, b) { return gymCount[b] - gymCount[a]; })[0];
+    var topGym = topGymId ? findGym(topGymId) : null;
+    var friends = friendsOf(state.me.id).map(function (u) {
+      return { user: u, n: workoutsOf(u.id).filter(inWeek).length };
+    }).filter(function (f) { return f.n > 0; })
+      .sort(function (a, b) { return (b.n - a.n) || String(a.user.name).localeCompare(String(b.user.name)); });
+    return {
+      range: range, workouts: mine.length, vol: vol, secs: secs, prs: prs,
+      topGym: topGym ? { gym: topGym, n: gymCount[topGymId] } : null,
+      streak: computeStreak(state.me.id), friends: friends
+    };
+  }
+
+  function recapVolumeText(vol) {
+    if (vol.lb) return Math.round(vol.lb).toLocaleString() + " lb";
+    if (vol.kg) return Math.round(vol.kg).toLocaleString() + " kg";
+    return "";
+  }
+
+  function renderHomeRecap() {
+    var el = document.getElementById("home-recap");
+    if (!el) return;
+    var day = new Date().getDay();
+    var r = (day === 0 || day === 1) ? buildRecap() : null;
+    if (!r || state.settings.recapSeen === r.range.key || (!r.workouts && !r.friends.length)) {
+      el.hidden = true;
+      el.innerHTML = "";
+      return;
+    }
+    var line = r.workouts
+      ? [r.workouts + (r.workouts === 1 ? " workout" : " workouts"), recapVolumeText(r.vol),
+         r.prs.length ? r.prs.length + (r.prs.length === 1 ? " record" : " records") : ""].filter(Boolean).join(" · ")
+      : "See how your friends’ week went";
+    el.hidden = false;
+    el.innerHTML = '<div class="recap-card">' +
+      '<button class="recap-open" id="recap-open">' +
+        '<span class="recap-kicker">Your week · ' + esc(r.range.label) + '</span>' +
+        '<span class="recap-line">' + esc(line) + '</span>' +
+      '</button>' +
+      '<button class="recap-x" id="recap-x" aria-label="Dismiss this week’s recap">&times;</button>' +
+    '</div>';
+    el.querySelector("#recap-open").addEventListener("click", function () { openRecap(); });
+    el.querySelector("#recap-x").addEventListener("click", function () {
+      state.settings.recapSeen = r.range.key;
+      persist();
+      renderHomeRecap();
+    });
+  }
+
+  function openRecap() {
+    var r = buildRecap();
+    var unit = r.streak.mode === "daily" ? "day" : r.streak.mode === "weekly" ? "week" : "block";
+    var html = '<p class="recap-when">' + esc(r.range.label) + '</p>';
+
+    if (r.workouts) {
+      var tiles = [[r.workouts, r.workouts === 1 ? "Workout" : "Workouts"]];
+      if (recapVolumeText(r.vol)) tiles.push([recapVolumeText(r.vol).split(" ")[0], "Volume " + recapVolumeText(r.vol).split(" ")[1]]);
+      if (r.secs) tiles.push([formatDurationLong(r.secs), "Training time"]);
+      tiles.push([r.prs.length, r.prs.length === 1 ? "Record" : "Records"]);
+      html += '<div class="stat-grid recap-grid">' + tiles.slice(0, 4).map(function (t) {
+        return '<div class="stat-tile"><span class="num">' + esc(String(t[0])) + '</span><span class="label">' + esc(t[1]) + '</span></div>';
+      }).join("") + '</div>';
+      if (r.prs.length) {
+        html += '<div class="pr-banner">' + FLAME_SVG.replace("streak-flame", "pr-flame") +
+          '<div><div class="pr-banner-title">' + (r.prs.length === 1 ? "A new personal record" : r.prs.length + " new personal records") + '</div>' +
+          r.prs.slice(0, 5).map(function (p) {
+            return '<div class="pr-line">' + esc(p.name) + ' <span class="num">' + esc(p.display) + '</span></div>';
+          }).join("") + '</div></div>';
+      }
+      var facts = [];
+      if (r.streak.current > 0) facts.push('<strong>' + r.streak.current + ' ' + unit + (r.streak.current === 1 ? "" : "s") + '</strong> in a row');
+      if (r.topGym) facts.push('Most at <strong>' + esc(r.topGym.gym.name) + '</strong> (' + r.topGym.n + (r.topGym.n === 1 ? " visit" : " visits") + ')');
+      if (facts.length) html += '<p class="recap-facts">' + facts.join(' <span class="dot">&middot;</span> ') + '</p>';
+    } else {
+      html += '<div class="empty-state">No workouts last week. This one is a clean slate.</div>';
+    }
+
+    if (r.friends.length) {
+      html += '<div class="manage-head">Friends last week</div>' + r.friends.slice(0, 6).map(function (f, i) {
+        return '<div class="regular" data-profile="' + esc(f.user.id) + '">' +
+          '<span class="regular-rank">' + (i === 0 ? CROWN_SVG : i + 1) + '</span>' + avatarHtml(f.user) +
+          '<span class="regular-name">' + esc(f.user.name) + '</span>' +
+          '<span class="regular-n num">' + f.n + (f.n === 1 ? " workout" : " workouts") + '</span></div>';
+      }).join("");
+    }
+    html += '<button class="btn btn-primary btn-block" id="recap-done" style="margin-top:18px;">Done</button>';
+
+    var el = openListSheet("Your week", html);
+    el.querySelector("#recap-done").addEventListener("click", closeListSheet);
+    // opening it is seeing it: the Home card for this week steps aside
+    if (state.settings.recapSeen !== r.range.key) {
+      state.settings.recapSeen = r.range.key;
+      persist();
+      renderHomeRecap();
+    }
+  }
+
   /* ----------------------------- theme ----------------------------- */
 
   /* Light is the default and matches MyFitnessPal. Dark is the same layout on
@@ -6226,7 +7267,7 @@ import {
      redraw whatever is on screen -- except mid-edit, where it would wipe
      what you're typing. */
   var wasAuthed = false;
-  if (/[?&](workout|friends|inbox|add)=/.test(location.search)) setTimeout(function () { openFromUrl(location.href); }, 0);
+  if (/[?&](workout|friends|inbox|recap|add)=/.test(location.search)) setTimeout(function () { openFromUrl(location.href); }, 0);
 
   startSync({
     getState: function () { return state; },
