@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<meta name="theme-color" content="#f4f6f8">
+<title>GymSocial developer</title>
+<link rel="icon" href="icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Roboto+Mono:wght@500;600&display=swap" rel="stylesheet">
+<style>
+  html, body { margin: 0; padding: 0; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<!--
+  The developer page. Anyone can open this address; what it can do is
+  decided in the database (supabase/010_admin.sql), which answers only a
+  developer account. The page itself holds no secrets.
+-->
+<div class="adm">
+
+  <header class="adm-top">
+    <div class="adm-mark">Gym<span>Social</span><em>developer</em></div>
+    <div class="adm-who" id="adm-who" hidden>
+      <span id="adm-who-name"></span>
+      <button type="button" class="adm-btn quiet" id="adm-signout">Sign out</button>
+    </div>
+  </header>
+
+  <p class="adm-loading" id="adm-loading">Loading&hellip;</p>
+
+  <!-- sign in -->
+  <section class="adm-card adm-narrow" id="adm-auth" hidden>
+    <h1 id="adm-auth-title">Developer sign in</h1>
+    <p class="adm-sub" id="adm-auth-sub">For the developer account only. It can't log workouts or be found in the app.</p>
+    <form id="adm-auth-form" autocomplete="on">
+      <label for="adm-user">Username</label>
+      <input id="adm-user" name="username" type="text" autocapitalize="none" autocorrect="off" spellcheck="false" autocomplete="username">
+      <label for="adm-pass">Password</label>
+      <input id="adm-pass" name="password" type="password" autocomplete="current-password">
+      <p class="adm-note" id="adm-auth-note" role="alert"></p>
+      <button type="submit" class="adm-btn primary wide" id="adm-auth-go">Sign in</button>
+    </form>
+    <button type="button" class="adm-link" id="adm-auth-switch">First time? Create the developer account</button>
+  </section>
+
+  <!-- signed in, but the database says no -->
+  <section class="adm-card adm-narrow" id="adm-blocked" hidden>
+    <h1 id="adm-blocked-title"></h1>
+    <p class="adm-sub" id="adm-blocked-text"></p>
+    <pre class="adm-code" id="adm-blocked-sql" hidden></pre>
+    <div class="adm-row-actions">
+      <button type="button" class="adm-btn" id="adm-copy-sql" hidden>Copy</button>
+      <button type="button" class="adm-btn primary" id="adm-recheck">Check again</button>
+    </div>
+  </section>
+
+  <main id="adm-main" hidden>
+
+    <section class="adm-card" aria-labelledby="adm-h-overview">
+      <div class="adm-head">
+        <h2 id="adm-h-overview">Overview</h2>
+        <button type="button" class="adm-btn quiet" id="adm-refresh">Refresh</button>
+      </div>
+      <div class="adm-tiles" id="adm-tiles"></div>
+      <p class="adm-foot" id="adm-tiles-note"></p>
+    </section>
+
+    <section class="adm-card" aria-labelledby="adm-h-people">
+      <div class="adm-head">
+        <h2 id="adm-h-people">People</h2>
+        <input type="search" id="adm-people-search" placeholder="Search name or username" aria-label="Search people">
+      </div>
+      <p class="adm-foot">Username, name, joined, last active and a workout count. Nothing else about anyone is shown here.</p>
+      <div class="adm-list" id="adm-people"></div>
+      <button type="button" class="adm-btn wide" id="adm-people-more" hidden>Show more</button>
+    </section>
+
+    <section class="adm-card" aria-labelledby="adm-h-gyms">
+      <div class="adm-head">
+        <h2 id="adm-h-gyms">Gyms</h2>
+        <input type="search" id="adm-gyms-search" placeholder="Search name, street or city" aria-label="Search gyms">
+      </div>
+      <p class="adm-foot" id="adm-gyms-note"></p>
+      <div class="adm-list" id="adm-gyms"></div>
+    </section>
+
+    <section class="adm-card" aria-labelledby="adm-h-map">
+      <div class="adm-head"><h2 id="adm-h-map">Map</h2></div>
+      <div class="adm-switch-row">
+        <div>
+          <div class="adm-strong">Address lookups: <span id="adm-geo-state"></span></div>
+          <p class="adm-foot">Finding a new gym's spot on the map from its address (OpenStreetMap). Turning this off stops it for everyone the next time they open the app; pins can still be placed by hand.</p>
+        </div>
+        <button type="button" class="adm-btn" id="adm-geo-toggle"></button>
+      </div>
+    </section>
+
+  </main>
+
+  <div class="adm-toast" id="adm-toast" role="status" aria-live="polite"></div>
+</div>
+<script type="module" src="/src/admin.js"></script>
+</body>
+</html>

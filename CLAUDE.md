@@ -16,7 +16,13 @@ developer: explain choices in plain words and keep comments that way too.
 - `src/app.js` only starts things. Each screen is its own file: `core`, `log`,
   `cardio`, `feed`, `inbox`, `gyms`, `live`, `home`, `progress`, `goals`,
   `profile`, `settings`. `store.js` is all storage and Supabase; `geo.js` is maps and
-  address lookup.
+  address lookup; `config.js` is which Supabase project.
+- `admin.html` + `src/admin.js` + `src/admin.css` are the developer page: a
+  second, separate page with its own sign-in (kept in the tab only). It calls
+  only the `admin_*` functions in `supabase/010_admin.sql`, which check the
+  `admins` table themselves. Never add a power to the page without a
+  function that checks `require_admin()`, and never return more about a
+  person than username, name, joined, last active and a workout count.
 - A screen file only *defines* things at load: functions and plain data.
   Anything that runs once at startup (wiring buttons, non-trivial starting
   values) goes in that file's `start...()` function, which `app.js` calls in
@@ -31,6 +37,9 @@ developer: explain choices in plain words and keep comments that way too.
   safe to re-run, and the owner runs it by hand. The app must keep working
   on a database that hasn't run the newest one: `store.js` treats "no such
   table / column / function" as "not available yet", never as a failure.
+- **Gyms are never deleted.** A duplicate is merged (`merged_into`; the row
+  stays so phones that still hold the old id keep syncing, and `store.js`
+  swaps it on the next pull) and a junk one is hidden (`admin_hidden`).
 - **Bump `CACHE` in `public/sw.js`** on any change, or phones keep the old app.
 - **Privacy is enforced in SQL** (row level security and `can_view`), not by
   hiding things in the UI. Other people's data is only ever shown as counts.

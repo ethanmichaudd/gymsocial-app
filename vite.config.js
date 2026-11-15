@@ -7,6 +7,11 @@ export default defineConfig({
    * Set BASE=/gymsocial/ in the Pages build (the workflow does this).
    */
   base: process.env.BASE || "/",
-  build: { outDir: "dist", emptyOutDir: true },
+  build: {
+    outDir: "dist",
+    emptyOutDir: true,
+    // two pages: the app, and the developer page (admin.html)
+    rollupOptions: { input: { main: "index.html", admin: "admin.html" } },
+  },
   server: { host: true, port: 5173 }, // host:true lets your phone open it on wifi
 });

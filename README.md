@@ -19,7 +19,9 @@ web app that installs on your phone like a native app.
                       │               ├─ profile.js    your card and history
                       │               ├─ settings.js   preferences, account, backup
                       │               ├─ store.js      where data is saved (device + Supabase)
+                      │               ├─ config.js     which Supabase project
                       │               └─ geo.js        map and address-lookup rules
+                      ├─ admin.html ─► src/admin.js    the developer page (separate from the app)
                       └─ src/pwa.js + public/sw.js     offline + installable
 ```
 
@@ -37,6 +39,25 @@ npm run dev
 
 Open http://localhost:5173. The terminal also prints a `192.168.x.x` address —
 open that on your phone (same wifi) to try it on the device you'll actually use.
+
+## The developer page
+
+`admin.html` (next to the app: `http://localhost:5173/admin.html`, or
+`.../admin.html` on the live site) is for a developer account only: how many
+people use the app, change a username, fix / merge / hide gyms, and switch
+address lookups on or off. It shows a username, name, joined, last active and
+a workout count per person, and nothing else.
+
+One-time setup:
+
+1. Run `supabase/010_admin.sql` in the Supabase SQL editor.
+2. Open `admin.html`, choose "Create the developer account".
+3. Run the one line the page then shows you (it adds that account to the
+   `admins` list). Only someone who can open the Supabase project can.
+
+A developer account can't log workouts, can't be found in the app, and the
+app won't sign it in. The database enforces all of this; the page is only a
+front end.
 
 ## Test it
 

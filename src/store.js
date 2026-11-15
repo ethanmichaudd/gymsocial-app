@@ -15,13 +15,7 @@
  */
 
 import { createClient } from "@supabase/supabase-js";
-
-// The anon key is public by design: Row Level Security in schema.sql is what
-// keeps one account out of another's data. .env can override both.
-const SUPABASE_URL =
-  import.meta.env.VITE_SUPABASE_URL || "https://kmhndltnnlhovykfffjg.supabase.co";
-const SUPABASE_ANON_KEY =
-  import.meta.env.VITE_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImttaG5kbHRubmxob3Z5a2ZmZmpnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTQwMjAxMzEsImV4cCI6MjEwOTU5NjEzMX0.lP0VZq6ZHBpFsnvu_iDNWB-62hYPDuK_osl5D9pTuoQ";
+import { SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_DOMAIN } from "./config.js";
 
 const PHOTO_BUCKET = "workout-photos";
 const META_KEY = "gymsocial_sync_v1";         // what this device last synced
@@ -80,8 +74,6 @@ export function currentUser() {
    receives mail for -- with "Confirm email" off, nothing is ever sent.
    Anything typed with an @ in it is treated as a real email, so accounts
    made that way still sign in. */
-const LOGIN_DOMAIN = "users.gymsocial.app";
-
 function loginEmail(id) {
   const v = String(id || "").trim().toLowerCase().replace(/^@/, "");
   return v.includes("@") ? v : v + "@" + LOGIN_DOMAIN;
@@ -98,7 +90,31 @@ export async function signIn(id, password) {
     if (/invalid login/i.test(error.message)) throw new Error("Wrong username or password.");
     throw error;
   }
+  if (await isDeveloperAccount(data.user && data.user.id)) {
+    await supabase.auth.signOut();
+    throw new Error("That\u2019s the developer account. It only works on the developer page.");
+  }
   return data.user;
+}
+
+/* A developer account (supabase/010_admin.sql) is for the developer page
+   only: the app turns it away, and the database refuses its workouts
+   anyway. One question per account; "no" is remembered on this device so
+   opening the app doesn't ask again. */
+const NOT_DEV_KEY = "gymsocial_notdev_v1";
+const devChecks = {};
+
+function isDeveloperAccount(uid) {
+  if (!supabase || !uid) return Promise.resolve(false);
+  try { if (localStorage.getItem(NOT_DEV_KEY) === uid) return Promise.resolve(false); } catch (e) { /* no storage */ }
+  if (!devChecks[uid]) {
+    devChecks[uid] = Promise.resolve(supabase.rpc("is_admin")).then(({ data, error }) => {
+      // before 010 has been run there is no such function: nobody is a developer
+      if (!error && data === false) { try { localStorage.setItem(NOT_DEV_KEY, uid); } catch (e) { /* full */ } }
+      return !error && data === true;
+    }).catch(() => false).finally(() => { delete devChecks[uid]; });   // only shared while in flight
+  }
+  return devChecks[uid];
 }
 
 /** Returns true if the project still asks for email confirmation. */
@@ -177,7 +193,17 @@ export function startSync({ getState, onChange, onStatus }) {
     sync.user = session ? { id: session.user.id, email: session.user.email } : null;
     if (!sync.user) { setStatus("off"); return; }
     // the listener must not await Supabase calls itself, so hop off it
-    if (sync.user.id !== before) setTimeout(() => { syncNow(); refreshPushSubscription(); }, 0);
+    if (sync.user.id !== before) {
+      const uid = sync.user.id;
+      setTimeout(() => {
+        isDeveloperAccount(uid).then((dev) => {
+          if (dev) { supabase.auth.signOut(); return; }
+          if (!sync.user || sync.user.id !== uid) return;
+          syncNow();
+          refreshPushSubscription();
+        });
+      }, 0);
+    }
   });
 
   document.addEventListener("visibilitychange", () => {
@@ -736,11 +762,52 @@ async function pullAll() {
     return false;
   });
 
+  if (await followMergedGyms(state, meta)) changed = true;
+
   await refreshPhotoUrls(state);
 
   saveMeta(meta);
   persistLocal(state);
   if (changed || wk.data.length) sync.onChange && sync.onChange();
+}
+
+/**
+ * A developer can merge a duplicate gym into another (010_admin.sql). The
+ * database already moved the workouts; this swaps the old gym for the kept
+ * one on this phone's own list. Never blocks a sync: on any trouble the
+ * list simply stays as it was.
+ */
+async function followMergedGyms(state, meta) {
+  if (sync.noRedirects) return false;
+  const ids = state.gyms.map((g) => g.id).filter((id) => isUuid(id) && meta.gyms[id]);
+  if (!ids.length) return false;
+  let rows = null;
+  try {
+    const { data, error } = await supabase.rpc("gym_redirects", { p_ids: ids });
+    if (error) { if (missingFunction(error)) sync.noRedirects = true; return false; }
+    rows = data;
+  } catch (e) { return false; }
+  if (!Array.isArray(rows) || !rows.length) return false;
+  rows.forEach((r) => {
+    const kept = { id: r.id, name: r.name, street: r.street || "", city: r.city || "", state: r.state || "" };
+    if (r.is_private != null) kept.private = Boolean(r.is_private);
+    if (r.lat != null && r.lng != null) { kept.lat = Number(r.lat); kept.lng = Number(r.lng); }
+    const old = state.gyms.find((x) => x.id === r.from_id);
+    let mine = state.gyms.find((x) => x.id === r.id);
+    if (mine) {
+      Object.assign(mine, kept);
+      state.gyms = state.gyms.filter((x) => x.id !== r.from_id);
+    } else if (old) {
+      delete old.lat; delete old.lng; delete old.locDirty;
+      Object.assign(old, kept);
+      mine = old;
+    }
+    state.workouts.forEach((w) => { if (w.gymId === r.from_id) w.gymId = r.id; });
+    if (state.settings.homeGymId === r.from_id) state.settings.homeGymId = r.id;
+    delete meta.gyms[r.from_id];
+    if (mine) meta.gyms[r.id] = gymPrint(mine);
+  });
+  return true;
 }
 
 function workoutFromRow(r, state) {

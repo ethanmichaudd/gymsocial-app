@@ -20,6 +20,8 @@
 alter table public.gyms add column if not exists lat double precision;
 alter table public.gyms add column if not exists lng double precision;
 alter table public.gyms add column if not exists is_private boolean not null default false;
+-- set when a developer merges a duplicate into another gym (010_admin.sql)
+alter table public.gyms add column if not exists merged_into uuid references public.gyms(id);
 
 alter table public.gyms drop constraint if exists gyms_latlng_range;
 alter table public.gyms add constraint gyms_latlng_range check (
@@ -83,6 +85,7 @@ language sql stable security definer set search_path = public as $$
     group by w.gym_id
   ) s on s.gym_id = g.id
   where auth.uid() is not null
+    and g.merged_into is null
     and (not g.is_private
          or g.created_by = auth.uid()
          or exists (select 1 from workouts w where w.gym_id = g.id and w.user_id = auth.uid()))

@@ -9,6 +9,11 @@
  * before a migration is run. Everything the app writes is recorded in
  * `db.log`, which is how tests check what was (and wasn't) sent.
  *
+ * The developer page (admin.html) is answered here too: set `db.isAdmin`
+ * to make the signed-in account a developer account, `db.noAdminSql` for a
+ * database that hasn't run 010, and `db.logins = { name: password }` to
+ * let the sign-in forms work.
+ *
  * installMaps() does the same for the map tiles and the address lookup, so
  * the tests never call OpenStreetMap's servers either.
  */
@@ -94,7 +99,71 @@ export async function install(context, db) {
 
     if (path.startsWith("/auth/v1/")) {
       if (path.endsWith("/user")) return json(route, { id: ME, email: "ethan@users.gymsocial.app" });
+      // the sign-in forms, when a test asks for them (db.logins = { username: password })
+      if (db.logins && (path.endsWith("/token") || path.endsWith("/signup")) && body && body.email) {
+        const name = body.email.split("@")[0];
+        if (path.endsWith("/signup")) {
+          if (db.logins[name]) return json(route, { code: 422, error_code: "user_already_exists", msg: "User already registered" }, 422);
+          db.logins[name] = body.password;
+        } else if (db.logins[name] !== body.password) {
+          return json(route, { code: 400, error_code: "invalid_credentials", msg: "Invalid login credentials" }, 400);
+        }
+        return json(route, sessionFor(body.email));
+      }
       return json(route, {});
+    }
+    // ---- the developer account (010_admin.sql) ----
+    if (path === "/rest/v1/rpc/is_admin" || path === "/rest/v1/rpc/gym_redirects" || path.startsWith("/rest/v1/rpc/admin_")) {
+      const fn = path.split("/").pop();
+      if (db.noAdminSql) return json(route, { code: "PGRST202", message: "Could not find the function public." + fn + " in the schema cache" }, 404);
+      if (fn === "is_admin") return json(route, db.isAdmin === true);
+      if (fn === "gym_redirects") return json(route, (db.redirects || []).filter((r) => (body.p_ids || []).includes(r.from_id)));
+      if (!db.isAdmin) return json(route, { code: "42501", message: "Developer account only." }, 403);
+      const bad = (message, code = "22023") => json(route, { code, message }, 400);
+      const listed = () => db.gyms.filter((g) => !g.merged_into && (!g.is_private || g.admin_hidden));
+      if (fn === "admin_overview") {
+        return json(route, { users: db.profiles.length, new_week: 2, signed_in: db.noSessions ? null : 3, active_day: 2, active_week: 4,
+          workouts: db.workouts.length, workouts_week: db.workouts.length, gyms: listed().filter((g) => !g.admin_hidden).length,
+          gyms_private: db.gyms.filter((g) => g.is_private && !g.admin_hidden).length, gyms_hidden: listed().filter((g) => g.admin_hidden).length,
+          gyms_no_pin: listed().filter((g) => g.lat == null).length, geocoding: !db.geocodingOff });
+      }
+      if (fn === "admin_users") {
+        const term = (body.p_search || "").toLowerCase();
+        const rows = db.profiles.filter((p) => (p.username + " " + (p.display_name || "")).toLowerCase().includes(term))
+          .map((p, i) => ({ id: p.id, username: p.username, display_name: p.display_name, joined: ago(60 * 24 * (i + 1)),
+            last_seen: i === 4 ? null : ago(30 * (i + 1)), signed_in: i < 3, workouts: db.workouts.filter((w) => w.user_id === p.id).length }));
+        return json(route, rows.slice(body.p_offset || 0, (body.p_offset || 0) + (body.p_limit || 50)));
+      }
+      if (fn === "admin_set_username") {
+        const clean = String(body.p_name || "").trim().toLowerCase().replace(/^@/, "");
+        if (!/^[a-z0-9_.]{3,20}$/.test(clean)) return bad("Use 3-20 lowercase letters, numbers, _ or .");
+        if (db.profiles.some((p) => p.username === clean && p.id !== body.p_user)) return bad("That username is taken.", "23505");
+        db.profiles.find((p) => p.id === body.p_user).username = clean;
+        return json(route, clean);
+      }
+      if (fn === "admin_gyms") {
+        return json(route, listed().map((g) => ({ id: g.id, name: g.name, street: g.street, city: g.city, state: g.state, lat: g.lat, lng: g.lng,
+          hidden: Boolean(g.admin_hidden), added: ago(60 * 24 * 9), sessions: (db.counts[g.id] || [0, 0, 0])[2], people: (db.counts[g.id] || [0, 0, 0])[0] })));
+      }
+      if (fn === "admin_set_geocoding") { db.geocodingOff = !body.p_on; return json(route, Boolean(body.p_on)); }
+      const g = db.gyms.find((x) => x.id === (body.p_gym || body.p_from));
+      if (!g) return bad("No such gym.");
+      if (fn === "admin_update_gym") {
+        if (db.gyms.some((x) => x.id !== g.id && !x.merged_into && x.name === body.p_name && x.street === body.p_street && x.city === body.p_city && x.state === body.p_state)) {
+          return bad("Another gym already has that exact name and address. Merge them instead.", "23505");
+        }
+        Object.assign(g, { name: body.p_name, street: body.p_street, city: body.p_city, state: body.p_state, lat: body.p_lat, lng: body.p_lng });
+        return route.fulfill({ status: 204, headers: CORS });
+      }
+      if (fn === "admin_merge_gyms") {
+        const moved = (db.counts[g.id] || [0, 0, 0])[2];
+        const into = db.counts[body.p_into] || (db.counts[body.p_into] = [0, 0, 0]);
+        into[2] += moved;
+        db.workouts.forEach((w) => { if (w.gym_id === g.id) w.gym_id = body.p_into; });
+        g.merged_into = body.p_into;
+        return json(route, moved);
+      }
+      if (fn === "admin_hide_gym") { g.admin_hidden = Boolean(body.p_hidden); g.is_private = Boolean(body.p_hidden); return route.fulfill({ status: 204, headers: CORS }); }
     }
     if (path.startsWith("/storage/")) return json(route, []);
     if (path === "/rest/v1/rpc/accept_friend_request") {
@@ -107,7 +176,7 @@ export async function install(context, db) {
     }
     if (path.startsWith("/rest/v1/rpc/gym_") || path.endsWith("/rpc/set_gym_location")) {
       if (db.legacy) return json(route, { code: "PGRST202", message: "Could not find the function public." + path.split("/").pop() + " in the schema cache" }, 404);
-      if (path.endsWith("gym_directory")) return json(route, db.gyms.map((g) => ({ ...g, people_30d: (db.counts[g.id] || [0, 0, 0])[0], sessions_30d: (db.counts[g.id] || [0, 0, 0])[1], sessions_all: (db.counts[g.id] || [0, 0, 0])[2] })));
+      if (path.endsWith("gym_directory")) return json(route, db.gyms.filter((g) => !g.merged_into).map((g) => ({ ...g, people_30d: (db.counts[g.id] || [0, 0, 0])[0], sessions_30d: (db.counts[g.id] || [0, 0, 0])[1], sessions_all: (db.counts[g.id] || [0, 0, 0])[2] })));
       if (path.endsWith("gym_stats")) return json(route, db.stats);
       const g = db.gyms.find((x) => x.id === body.p_gym);
       if (g && g.lat != null && g.created_by !== ME && g.id !== G2 && !db.workouts.some((w) => w.user_id === ME && w.gym_id === g.id)) {
@@ -163,6 +232,7 @@ export async function install(context, db) {
         rows = rows.filter((r) => inList(q.get("workout_id")).includes(r.workout_id));
       } else if (table === "gyms") {
         const eq = (k) => (q.get(k) || "").startsWith("eq.") ? q.get(k).slice(3) : null;
+        rows = rows.filter((g) => !g.merged_into);          // a merged gym can't be read (010)
         if (eq("name") !== null) rows = rows.filter((g) => g.name === eq("name") && g.street === eq("street") && g.city === eq("city") && g.state === eq("state"));
         else if (q.get("or")) { const m = q.get("or"); rows = rows.filter((g) => m.includes(g.id) || (g.created_by === ME && m.includes("created_by.eq." + ME))); }
         else if (eq("created_by") !== null) rows = rows.filter((g) => g.created_by === eq("created_by"));
@@ -214,12 +284,16 @@ export async function installMaps(context, db) {
   });
 }
 
-export function sessionScript() {
+function sessionFor(email) {
   const payload = Buffer.from(JSON.stringify({ sub: ME, role: "authenticated", exp: Math.floor(Date.now() / 1000) + 86400 * 40 })).toString("base64url");
-  const session = {
+  return {
     access_token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9." + payload + ".sig",
     refresh_token: "r", token_type: "bearer", expires_in: 86400 * 40, expires_at: Math.floor(Date.now() / 1000) + 86400 * 40,
-    user: { id: ME, email: "ethan@users.gymsocial.app", aud: "authenticated", role: "authenticated", app_metadata: {}, user_metadata: {}, created_at: new Date().toISOString() },
+    user: { id: ME, email, aud: "authenticated", role: "authenticated", app_metadata: {}, user_metadata: {}, created_at: new Date().toISOString() },
   };
+}
+
+export function sessionScript() {
+  const session = sessionFor("ethan@users.gymsocial.app");
   return `if (!localStorage.getItem("sb-kmhndltnnlhovykfffjg-auth-token")) localStorage.setItem("sb-kmhndltnnlhovykfffjg-auth-token", ${JSON.stringify(JSON.stringify(session))});`;
 }
