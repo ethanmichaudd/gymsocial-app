@@ -140,6 +140,17 @@ export function renderSettings() {
       '</div>' +
 
       '<div class="setting-block">' +
+        '<label class="field-label">Weight in</label>' +
+        '<div class="segmented">' +
+          [["lb", "Pounds (lb)"], ["kg", "Kilograms (kg)"]].map(function (o) {
+            return '<button class="seg-btn' + ((st.unit === "kg" ? "kg" : "lb") === o[0] ? " selected" : "") +
+              '" data-unit-set="' + o[0] + '">' + o[1] + '</button>';
+          }).join("") +
+        '</div>' +
+        '<p class="setting-help">New sets and goals start in this unit. You can still switch any single set.</p>' +
+      '</div>' +
+
+      '<div class="setting-block">' +
         '<label class="field-label">Streak counted by</label>' +
         '<div class="segmented">' +
           ["weekly", "daily", "custom"].map(function (m) {
@@ -190,6 +201,13 @@ export function renderSettings() {
       persist();
       renderSettings();
       refreshEquipmentRails(at === -1 ? name : null);
+    });
+  });
+  el.querySelectorAll("[data-unit-set]").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      state.settings.unit = btn.getAttribute("data-unit-set");
+      persist();
+      renderSettings();
     });
   });
   el.querySelectorAll("[data-theme-set]").forEach(function (btn) {

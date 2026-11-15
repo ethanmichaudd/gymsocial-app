@@ -3,8 +3,9 @@
  */
 
 import {
-  bestValueIn, esc, findExercise, formatValue, metricOf, myWorkouts, shortDate, unitFor
+  bestValueIn, defaultUnit, esc, findExercise, formatValue, metricOf, myWorkouts, shortDate, unitFor
 } from "./core.js";
+import { best1RMs, renderGoals, weightText } from "./goals.js";
 
 /* ----------------------------- progress ----------------------------- */
 
@@ -39,6 +40,7 @@ function buildProgressSeries() {
 var progressQuery = "";
 
 export function renderProgress() {
+  renderGoals();
   var series = buildProgressSeries();
   var ids = Object.keys(series).sort(function (a, b) { return series[b].points.length - series[a].points.length; });
   var resultsEl = document.getElementById("progress-results");
@@ -90,6 +92,12 @@ export function renderProgress() {
   var html = '<div class="card progress-card">' +
     '<div class="stat-row"><h2>' + esc(s.name) + '</h2>' + (isPR ? '<span class="pr-badge">New PR</span>' : '') + '</div>' +
     '<div class="best-stat">Best logged: <span class="num">' + esc(formatValue(best, s.metric, s.unit)) + '</span></div>';
+
+  // for a weighted lift: what that best set suggests you could do for one rep
+  var oneRep = s.metric === "reps" ? best1RMs(defaultUnit())[selectedExerciseId.split("|")[0]] : null;
+  if (oneRep) {
+    html += '<div class="best-stat">Estimated 1RM: <span class="num">' + esc(weightText(oneRep.value, defaultUnit())) + '</span></div>';
+  }
 
   if (s.points.length > 1) {
     html += '<div class="chart-wrap"><svg id="progress-svg" viewBox="0 0 320 170" style="width:100%;height:auto;overflow:visible"></svg><div id="chart-tooltip" hidden></div></div>';

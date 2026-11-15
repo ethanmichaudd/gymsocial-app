@@ -59,6 +59,22 @@ for (const theme of ["light", "dark"]) test(`Signed in (${theme})`, async ({ bro
   check(T + "looked-up pin saved for everyone", pinPush.length === 1 && pinPush[0].body.p_gym === G2 && Math.abs(pinPush[0].body.p_lat - 42.3519) < 1e-6, JSON.stringify(pinPush));
   await shot(page, `p2-${theme}-1-gyms`);
 
+  // ---- the whole screen scrolls, map included ----
+  const mapTop = (await page.locator("#places-map").boundingBox()).y;
+  const scrolled = await page.evaluate(() => { const el = document.getElementById("screen-gyms"); el.scrollTop = 160; return el.scrollTop; });
+  const mapTopAfter = (await page.locator("#places-map").boundingBox()).y;
+  check(T + "scrolling the Gyms screen moves the map with it", scrolled > 40 && Math.abs((mapTop - mapTopAfter) - scrolled) < 2, `scrolled ${scrolled}, map moved ${mapTop - mapTopAfter}`);
+  check(T + "one finger on the map scrolls the page (two move the map)", await page.evaluate(() => { const m = document.getElementById("places-map"); return getComputedStyle(m).touchAction.includes("pan-y") && !m.classList.contains("leaflet-touch-drag"); }), await page.evaluate(() => getComputedStyle(document.getElementById("places-map")).touchAction + " " + document.getElementById("places-map").className));
+  // a sideways swipe on the map is someone trying to move it: tell them how
+  await page.evaluate(() => {
+    const m = document.getElementById("places-map"); const r = m.getBoundingClientRect();
+    const t = (x, y) => new Touch({ identifier: 1, target: m, clientX: x, clientY: y });
+    m.dispatchEvent(new TouchEvent("touchstart", { touches: [t(r.left + 60, r.top + 60)], bubbles: true }));
+    m.dispatchEvent(new TouchEvent("touchmove", { touches: [t(r.left + 130, r.top + 64)], bubbles: true }));
+  });
+  check(T + "sideways swipe on the map shows the two-finger hint", await page.locator("#places-map-hint").isVisible() && /two fingers/.test(await page.innerText("#places-map-hint")));
+  await page.evaluate(() => { document.getElementById("screen-gyms").scrollTop = 0; });
+
   // ---- search: local only ----
   const geoBefore = db.geo.length;
   await page.fill("#places-search", "crunch");

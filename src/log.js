@@ -6,19 +6,20 @@
 import { adoptGym, cloudEnabled, currentUser, photoSrc, shrinkPhoto } from "./store.js";
 import {
   activateTab, avatarHtml, buzz, calendarDate, closeListSheet, computeStreak, dateInputValue,
-  DEFAULT_EQUIPMENT, DEFAULT_METRIC, detectPRs, dropsWeight, durationOf, endIsoFrom,
-  equipmentList, esc, EXERCISE_CATEGORIES, featureOn, findExercise, findGym, findUser,
-  FLAME_SVG, formatDuration, formatDurationLong, formatTime, friendsOf, gymAddress, gymLabel,
-  isoFromDateTime, joinDuration, lastSessionFor, loggedSetTime, metricOf, METRICS, myWorkouts,
-  openConfirm, openListSheet, persist, repSetCount, sessionDistance, sessionVolume, shortDate,
-  showToast, splitDuration, state, summarizeSets, tabBeforeLog, timeInputValue, titleCase, uid,
-  usesDuration, usesEquipment, weightLabel, workoutById
+  DEFAULT_EQUIPMENT, DEFAULT_METRIC, defaultUnit, detectPRs, dropsWeight, durationOf,
+  endIsoFrom, equipmentList, esc, EXERCISE_CATEGORIES, featureOn, findExercise, findGym,
+  findUser, FLAME_SVG, formatDuration, formatDurationLong, formatTime, friendsOf, gymAddress,
+  gymLabel, isoFromDateTime, joinDuration, lastSessionFor, loggedSetTime, metricOf, METRICS,
+  myWorkouts, openConfirm, openListSheet, persist, repSetCount, sessionDistance, sessionVolume,
+  shortDate, showToast, splitDuration, state, summarizeSets, tabBeforeLog, timeInputValue,
+  titleCase, uid, usesDuration, usesEquipment, weightLabel, workoutById
 } from "./core.js";
 import {
   cardioBlockFor, cardioBlockHtml, cardioTiles, ensureActivity, isCardioWorkout,
   lastActivityName, wireCardioBlocks
 } from "./cardio.js";
 import { openShareCard } from "./feed.js";
+import { goalsReachedBy } from "./goals.js";
 import { knownGym, openGymFinder } from "./gyms.js";
 import { openDraftChoice, renderHome } from "./home.js";
 import { renderLogLive, startLive, stopLive, todayInput } from "./live.js";
@@ -93,6 +94,18 @@ function openSessionSummary(workout, prs) {
         prs.map(function (p) {
           return '<div class="pr-line">' + esc(p.name) + ' <span class="num">' + esc(p.display) +
             '</span> <span class="pr-delta">+' + esc(p.delta) + ' on your best</span></div>';
+        }).join("") +
+      '</div></div>';
+  }
+
+  // a strength goal this workout just reached (said once, here)
+  var reached = goalsReachedBy(workout);
+  if (reached.length) {
+    html += '<div class="pr-banner">' +
+      FLAME_SVG.replace("streak-flame", "pr-flame") +
+      '<div><div class="pr-banner-title">' + (reached.length === 1 ? "Goal reached" : reached.length + " goals reached") + '</div>' +
+        reached.map(function (g) {
+          return '<div class="pr-line">' + esc(g.name) + ' <span class="num">' + esc(g.text) + '</span> estimated 1RM</div>';
         }).join("") +
       '</div></div>';
   }
@@ -870,7 +883,7 @@ function isBlankSet(st) {
 }
 
 function blankSet(unit, distUnit) {
-  return { reps: null, seconds: null, weight: null, distance: null, unit: unit || "lb", distUnit: distUnit || "mi" };
+  return { reps: null, seconds: null, weight: null, distance: null, unit: unit || defaultUnit(), distUnit: distUnit || "mi" };
 }
 
 function prefillSet(exerciseId, excludeWorkoutId, equipment) {

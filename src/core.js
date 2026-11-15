@@ -30,6 +30,12 @@ export var STORAGE_KEY = "gymsocial_v1";
    (The prefix is kept for readability at the call sites only.) */
 export function uid(prefix) { return newId(); }
 
+/* The weight unit new sets and goals start in (Settings -> Weight in).
+   Any single set can still be switched; this is only the starting point. */
+export function defaultUnit() {
+  return state && state.settings && state.settings.unit === "kg" ? "kg" : "lb";
+}
+
 /* Movement pattern per exercise -- drives the calendar colors. */
 /* How a set is measured. An exercise picks one; every screen that reads
    sets asks here rather than assuming reps-and-weight. */

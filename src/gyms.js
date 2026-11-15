@@ -460,11 +460,32 @@ function drawPlacesMap(rows) {
     if (currentTab !== "gyms") return;
     if (!placesMap) {
       box.innerHTML = "";
-      placesMap = L.map(box, { zoomControl: false }).setView(NOWHERE, 3);
+      // The map scrolls with the page. On a phone one finger scrolls (so a
+      // swipe that starts on the map still moves the page) and two fingers
+      // move or zoom the map. With a mouse, dragging moves the map and the
+      // wheel is left alone for scrolling the page.
+      var touch = !!(window.matchMedia && window.matchMedia("(pointer: coarse)").matches);
+      placesMap = L.map(box, { zoomControl: false, dragging: !touch, scrollWheelZoom: false }).setView(NOWHERE, 3);
       L.control.zoom({ position: "topright" }).addTo(placesMap);
       addTiles(placesMap);
       placesPins = L.layerGroup().addTo(placesMap);
       placesMap.on("dragstart", function () { placesTouched = true; });
+      // A sideways one-finger swipe on the map means "I'm trying to move
+      // it": say how, briefly. An up-or-down swipe is just scrolling.
+      var hint = document.getElementById("places-map-hint");
+      var from = null, hintTimer = null;
+      box.addEventListener("touchstart", function (e) {
+        if (e.touches.length > 1) { placesTouched = true; hint.hidden = true; from = null; return; }
+        from = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+      }, { passive: true });
+      box.addEventListener("touchmove", function (e) {
+        if (!touch || !from || e.touches.length !== 1) return;
+        var dx = Math.abs(e.touches[0].clientX - from.x), dy = Math.abs(e.touches[0].clientY - from.y);
+        if (dx < 14 || dx < dy) return;
+        hint.hidden = false;
+        clearTimeout(hintTimer);
+        hintTimer = setTimeout(function () { hint.hidden = true; }, 1600);
+      }, { passive: true });
     }
     placesMap.invalidateSize();
     placesPins.clearLayers();

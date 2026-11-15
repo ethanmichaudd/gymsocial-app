@@ -1513,11 +1513,10 @@
 
   /* ---------- gyms as places ---------- */
 
-  /* The Gyms tab doesn't scroll as a whole: the search and the map stay put
-     and only the list under them scrolls, so a swipe on the map moves the
-     map and a swipe on the list moves the list. */
-  #screen-gyms.active { display: flex; flex-direction: column; overflow: hidden; padding-bottom: 0; }
-  #screen-gyms .screen-head { margin-bottom: 10px; flex-shrink: 0; }
+  /* The Gyms tab scrolls as one page: search, map, then the list, and the
+     map scrolls away with everything else. (On a phone, one finger scrolls
+     the page even over the map; two fingers move the map. See gyms.js.) */
+  #screen-gyms .screen-head { margin-bottom: 10px; }
   .places-search { display: flex; gap: 8px; align-items: center; flex-shrink: 0; margin-bottom: 10px; }
   .places-search .find-box { flex: 1; min-width: 0; margin: 0; }
   .places-search .find-box input[type="search"] { height: 46px; }
@@ -1533,12 +1532,12 @@
   /* z-index:0 makes each map its own layer. Without it the map's internal
      layers (which use z-index up to 1000) would paint over the sheets. */
   .places-map-wrap {
-    position: relative; z-index: 0; flex: 0 0 40%; min-height: 200px;
+    position: relative; z-index: 0; height: 300px;
     border-radius: var(--radius-lg); overflow: hidden;
     border: 1px solid var(--border); background: var(--surface-2);
   }
   /* typing a search: give the results the room, not the map */
-  body.kb-open .places-map-wrap { flex-basis: 110px; min-height: 110px; }
+  body.kb-open .places-map-wrap { height: 110px; }
   .places-map { position: absolute; inset: 0; }
   .places-map-note {
     position: absolute; left: 50%; top: 12px; transform: translateX(-50%); z-index: 1100;
@@ -1546,7 +1545,8 @@
     padding: 6px 12px; font-size: 12.5px; font-weight: 600; color: var(--text-muted);
     white-space: nowrap; box-shadow: var(--shadow); pointer-events: none;
   }
-  .places-list { flex: 1; min-height: 0; overflow-y: auto; padding: 10px 0 40px; -webkit-overflow-scrolling: touch; }
+  .places-map-note.is-hint { top: auto; bottom: 12px; }
+  .places-list { padding: 10px 0 0; }
   .map-off {
     height: 100%; display: flex; align-items: center; justify-content: center;
     font-size: 13px; color: var(--text-muted);
@@ -1846,3 +1846,36 @@
   .recap-facts .dot { color: var(--text-faint); }
   #profile-progress { margin-bottom: 8px; }
   #profile-recap { margin-top: 0; }
+
+  /* ---------- goals ---------- */
+  .goals-card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg);
+    padding: 14px 14px 12px; margin-bottom: 20px;
+  }
+  .goals-head {
+    font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--text-faint); margin-bottom: 6px;
+  }
+  .goal-row {
+    display: block; width: 100%; text-align: left; background: none; border: none;
+    border-bottom: 1px solid var(--border-soft); padding: 11px 0 12px;
+    font-family: inherit; color: var(--text);
+  }
+  button.goal-row { cursor: pointer; }
+  .goal-top { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+  .goal-name { font-size: 15px; font-weight: 700; min-width: 0; }
+  .goal-value { font-size: 13.5px; font-weight: 600; color: var(--text); white-space: nowrap; }
+  .goal-arrow { color: var(--text-faint); font-weight: 400; }
+  .goal-bar {
+    height: 8px; border-radius: 999px; background: var(--surface-2); overflow: hidden; margin: 8px 0 6px;
+  }
+  .goal-bar span { display: block; height: 100%; min-width: 4px; border-radius: 999px; background: var(--accent); }
+  .goal-bar.is-done span { background: var(--positive); }
+  .goal-sub { display: block; font-size: 12px; color: var(--text-muted); }
+  .goal-row.is-reached .goal-sub { color: var(--positive); font-weight: 600; }
+  .goal-hint { font-size: 13px; color: var(--text-muted); line-height: 1.45; margin: 12px 0 2px; }
+  .goal-hint strong { color: var(--text); }
+  #goal-add { margin-top: 12px; }
+  .goal-fixed { font-size: 16px; font-weight: 700; padding: 4px 0; }
+  /* 16px so iPhone doesn't zoom the page when the box takes focus */
+  #goal-target, #goal-ex { font-size: 16px; }

@@ -14,8 +14,8 @@ developer: explain choices in plain words and keep comments that way too.
 ## Layout
 
 - `src/app.js` only starts things. Each screen is its own file: `core`, `log`,
-  `cardio`, `feed`, `inbox`, `gyms`, `live`, `home`, `progress`, `profile`,
-  `settings`. `store.js` is all storage and Supabase; `geo.js` is maps and
+  `cardio`, `feed`, `inbox`, `gyms`, `live`, `home`, `progress`, `goals`,
+  `profile`, `settings`. `store.js` is all storage and Supabase; `geo.js` is maps and
   address lookup.
 - A screen file only *defines* things at load: functions and plain data.
   Anything that runs once at startup (wiring buttons, non-trivial starting

@@ -15,6 +15,7 @@ web app that installs on your phone like a native app.
                       │               ├─ live.js       "at the gym now"
                       │               ├─ home.js       calendar, day view, weekly recap
                       │               ├─ progress.js   charts
+                      │               ├─ goals.js      weekly target, strength goals, estimated 1RM
                       │               ├─ profile.js    your card and history
                       │               ├─ settings.js   preferences, account, backup
                       │               ├─ store.js      where data is saved (device + Supabase)
