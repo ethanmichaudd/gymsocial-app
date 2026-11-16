@@ -18,6 +18,7 @@ web app that installs on your phone like a native app.
                       │               ├─ goals.js      weekly target, strength goals, estimated 1RM
                       │               ├─ profile.js    your card and history
                       │               ├─ settings.js   preferences, account, backup
+                      │               ├─ news.js       one-time messages (the new app icon)
                       │               ├─ store.js      where data is saved (device + Supabase)
                       │               ├─ config.js     which Supabase project
                       │               └─ geo.js        map and address-lookup rules

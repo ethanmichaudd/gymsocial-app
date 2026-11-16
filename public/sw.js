@@ -1,5 +1,5 @@
 /* Cache the app shell so it opens with no connection. Bump CACHE on release. */
-const CACHE = "gymsocial-v67";
+const CACHE = "gymsocial-v68";
 
 self.addEventListener("install", (event) => {
   self.skipWaiting();
@@ -21,6 +21,9 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   const { request } = event;
   if (request.method !== "GET") return;
+  // On your own computer (npm run dev) nothing is cached, so an edit to the
+  // code shows up on the next reload instead of the one after.
+  if (location.hostname === "localhost" || location.hostname === "127.0.0.1") return;
   // Supabase (accounts, sync, photos) always goes straight to the network
   if (new URL(request.url).origin !== location.origin) return;
 

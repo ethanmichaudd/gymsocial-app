@@ -8,6 +8,7 @@
  */
 
 import { currentUser, startSync } from "./store.js";
+import { startNews } from "./news.js";
 import { setMapConfig } from "./geo.js";
 import {
   activateTab, applyTheme, currentTab, openFromUrl, pendingInbox, pendingWorkout, persist,
@@ -74,6 +75,8 @@ migrateCardio();
 persist();
 
 renderHome();
+
+startNews();          // a one-time message (the new app icon); see news.js
 
 /* Accounts + sync. After a pull brings in changes from another phone,
    redraw whatever is on screen -- except mid-edit, where it would wipe

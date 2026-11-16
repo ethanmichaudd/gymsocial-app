@@ -86,6 +86,9 @@ const json = (route, body, status = 200) => route.fulfill({ status, headers: { .
 const inList = (v) => v.replace(/^in\.\(|\)$/g, "").split(",").map((x) => x.replace(/"/g, ""));
 
 export async function install(context, db) {
+  // the one-time "new app icon" message would sit on top of every test;
+  // only tests/news.spec.js asks for it (db.showNews)
+  if (!db.showNews) await context.addInitScript(() => { try { localStorage.setItem("gymsocial_news_logo_v1", "1"); } catch (e) { /* no storage yet */ } });
   await context.route("https://kmhndltnnlhovykfffjg.supabase.co/**", async (route) => {
     const req = route.request();
     const url = new URL(req.url());

@@ -52,6 +52,7 @@ for (const mode of [{ name: "light", theme: "light", legacy: false }, { name: "d
     check(T + "+ is a plus with nothing started", !(await fab.evaluate((el) => el.classList.contains("has-draft"))) && (await fab.getAttribute("aria-label")) === "Log a workout" && await page.locator(".tab-fab .fab-plus").isVisible());
     await addExercise(page, "Back Squat");
     await page.waitForTimeout(500);
+    check(T + "+ changes as soon as an exercise is added, while still on the Log screen", (await fab.evaluate((el) => el.classList.contains("has-draft"))) && await page.locator(".tab-fab .fab-resume").isVisible() && !(await page.locator(".tab-fab .fab-plus").isVisible()));
 
     // ---- filled in from last time ----
     const first = page.locator("#exercise-blocks .set-row input").first();

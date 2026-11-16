@@ -426,7 +426,9 @@ export function resetDraft() {
 export function renderFab() {
   var fab = document.querySelector(".tab-fab");
   if (!fab) return;
-  var on = Boolean(draftHasContent(draft));
+  // anything at all started counts: an exercise or cardio block (even one
+  // still showing last time's numbers), a title, a photo, a tagged friend
+  var on = Boolean(draftHasContent(draft) || (draft.exercises || []).length || (draft.withIds || []).length);
   fab.classList.toggle("has-draft", on);
   fab.setAttribute("aria-label", on ? "Continue your workout" : "Log a workout");
 }
@@ -1017,6 +1019,7 @@ function setLogKind(kind) {
 }
 
 export function renderLog() {
+  renderFab();
   var cardio = draft.kind === "cardio";
   document.querySelectorAll("#log-kind [data-kind]").forEach(function (b) {
     b.classList.toggle("selected", b.getAttribute("data-kind") === (cardio ? "cardio" : "lift"));

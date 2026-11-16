@@ -15,7 +15,7 @@ developer: explain choices in plain words and keep comments that way too.
 
 - `src/app.js` only starts things. Each screen is its own file: `core`, `log`,
   `cardio`, `feed`, `inbox`, `gyms`, `live`, `home`, `progress`, `goals`,
-  `profile`, `settings`. `store.js` is all storage and Supabase; `geo.js` is maps and
+  `profile`, `settings`, `news` (one-time messages). `store.js` is all storage and Supabase; `geo.js` is maps and
   address lookup; `config.js` is which Supabase project.
 - `admin.html` + `src/admin.js` + `src/admin.css` are the developer page: a
   second, separate page with its own sign-in (kept in the tab only). It calls

@@ -1927,3 +1927,13 @@
     display: block; position: absolute; top: 1px; right: 1px; width: 10px; height: 10px;
     border-radius: 50%; background: var(--live); border: 2.5px solid var(--surface);
   }
+
+  /* ---------- one-time message (news.js) ---------- */
+  .news { text-align: center; padding-bottom: 4px; }
+  .news-icon { width: 88px; height: 88px; border-radius: 20px; display: block; margin: 4px auto 14px; box-shadow: 0 8px 20px rgba(0, 60, 160, 0.22); }
+  .news-lead { font-size: 15px; color: var(--text); margin: 0 0 12px; line-height: 1.45; }
+  .news-steps { text-align: left; margin: 0 0 12px; padding-left: 22px; font-size: 14.5px; line-height: 1.5; color: var(--text); }
+  .news-steps li { margin-bottom: 6px; }
+  .news-note { text-align: left; font-size: 13px; color: var(--text-muted); margin: 0 0 10px; line-height: 1.45; }
+  .news-note.is-warning { background: var(--danger-bg); color: var(--text); border-radius: var(--radius-sm); padding: 10px 12px; }
+  .news .btn { margin-top: 6px; }
