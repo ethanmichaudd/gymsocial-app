@@ -618,7 +618,7 @@ export function summarizeSets(sets, metric, equipment, name) {
     : WEIGHT_MODES[weightMode(equipment)].suffix;
   var parts = [], run = null;
   sets.forEach(function (s) {
-    var sig = [s.reps, s.seconds, s.weight, s.distance, s[unitKey]].join("|");
+    var sig = [s.reps, s.seconds, s.weight, s.distance, s[unitKey], s.drop ? "drop" : ""].join("|");
     if (run && run.sig === sig) { run.n++; return; }
     run = { n: 1, sig: sig, s: s };
     parts.push(run);
@@ -635,7 +635,8 @@ export function summarizeSets(sets, metric, equipment, name) {
       return mult + hold + (s.weight != null ? " @ " + s.weight + unit + wSuffix : "");
     }
     var reps = s.reps == null ? "?" : s.reps;
-    return mult + reps + (s.weight != null ? " @ " + s.weight + unit + wSuffix : "");
+    // a drop set reads "↓ 8 @ 185lb"
+    return (s.drop ? "↓ " : "") + mult + reps + (s.weight != null ? " @ " + s.weight + unit + wSuffix : "");
   }).join(", ");
 }
 
@@ -1256,6 +1257,7 @@ export function startCore4() {
       if (getComputedStyle(frame).position !== "fixed") {  // wide screens
         frame.style.bottom = "";
         document.documentElement.style.setProperty("--kb", "0px");
+        document.documentElement.style.setProperty("--vvtop", "0px");
         document.body.classList.remove("kb-open");
         return;
       }
@@ -1263,6 +1265,9 @@ export function startCore4() {
       frame.style.bottom = covered + "px";
       // modals sit outside the frame, so they read the same number from here
       document.documentElement.style.setProperty("--kb", covered + "px");
+      // iOS can also slide the whole page up under the status bar to show a
+      // field; sheets start below whatever has been pushed off the top
+      document.documentElement.style.setProperty("--vvtop", Math.max(0, Math.round(vv.offsetTop)) + "px");
       // a tab bar pinned above the keyboard is just wasted room
       document.body.classList.toggle("kb-open", covered > 80);
     }

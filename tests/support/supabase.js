@@ -30,7 +30,7 @@ const ago = (min) => new Date(Date.now() - min * 60000).toISOString().replace("Z
 export function makeDb({ legacy = false, legacy9 = false } = {}) {
   if (legacy) legacy9 = true;
   const strip = (row, keys) => { if (legacy) keys.forEach((k) => delete row[k]); return row; };
-  const set = (weId, n, reps, weight) => ({ id: crypto.randomUUID(), workout_exercise_id: weId, set_number: n, reps, seconds: null, weight, weight_unit: "lb", distance: null, distance_unit: "mi", intensity: null, heart_rate: null, steps: null });
+  const set = (weId, n, reps, weight) => ({ id: crypto.randomUUID(), workout_exercise_id: weId, set_number: n, reps, seconds: null, weight, weight_unit: "lb", distance: null, distance_unit: "mi", intensity: null, heart_rate: null, steps: null, ...(legacy ? {} : { is_drop: false }) });
   const wk = (id, user, title, minsAgo, ex) => {
     const weId = crypto.randomUUID();
     return { id, user_id: user, gym_id: user === ME ? G2 : G1, title, performed_at: ago(minsAgo), ended_at: ago(minsAgo - 55), calories: 400, photo_path: null,
@@ -239,6 +239,10 @@ export async function install(context, db) {
         else if (q.get("id")) rows = rows.filter((g) => inList(q.get("id")).includes(g.id));
       }
       return json(route, rows);
+    }
+    // before 011: no is_drop column
+    if (table === "workout_sets" && method === "POST" && db.legacy && JSON.stringify(body).includes("is_drop")) {
+      return json(route, { code: "PGRST204", message: "Could not find the 'is_drop' column of 'workout_sets' in the schema cache" }, 400);
     }
     if (table === "reactions" && method === "POST") {
       db.reactions = db.reactions.filter((r) => !(r.workout_id === body.workout_id && r.user_id === body.user_id));

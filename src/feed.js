@@ -629,7 +629,7 @@ function openFriendsManage() {
   manageSearch = "";
   manageResults = [];
   var el = openListSheet("Friends",
-    '<div class="find-box">' +
+    '<div class="find-box is-sticky">' +
       '<svg class="find-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></svg>' +
       '<input type="search" id="friend-search" placeholder="Search by username" ' +
         'autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="search">' +

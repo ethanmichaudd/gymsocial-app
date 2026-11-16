@@ -242,12 +242,14 @@ export function startReuse(wk, opts) {
       var out = {
         exerciseId: exId, metric: metricOf(blk), equipment: equip,
         sets: blk.sets.map(function (st) {
-          return { reps: st.reps == null ? null : st.reps, seconds: st.seconds == null ? null : st.seconds,
+          var o = { reps: st.reps == null ? null : st.reps, seconds: st.seconds == null ? null : st.seconds,
             weight: st.weight == null ? null : st.weight, distance: st.distance == null ? null : st.distance,
             unit: st.unit || "lb", distUnit: st.distUnit || "mi",
             intensity: st.intensity == null ? null : st.intensity,
             heartRate: st.heartRate == null ? null : st.heartRate,
             steps: st.steps == null ? null : st.steps, prefill: true };
+          if (st.drop) o.drop = true;
+          return o;
         })
       };
       if (blk.superset) out.superset = blk.superset;
@@ -331,10 +333,12 @@ export function openEditWorkout(workoutId) {
         note: blk.note || "",
         superset: blk.superset || null,
         sets: blk.sets.map(function (s) {
-          return {
+          var o = {
             reps: s.reps, seconds: s.seconds, weight: s.weight, distance: s.distance,
             unit: s.unit || "lb", distUnit: s.distUnit || "mi"
           };
+          if (s.drop) o.drop = true;
+          return o;
         })
       };
     })
@@ -413,6 +417,18 @@ export function resetDraft() {
     if (el) el.value = "";
   });
   try { localStorage.removeItem(DRAFT_KEY); } catch (e) { /* nothing to clear */ }
+  renderFab();
+}
+
+/* The + in the tab bar: a plus when there's nothing started, a dumbbell
+   with a green dot while a workout is half logged, so it's plain that
+   tapping it goes back to that workout rather than starting a new one. */
+export function renderFab() {
+  var fab = document.querySelector(".tab-fab");
+  if (!fab) return;
+  var on = Boolean(draftHasContent(draft));
+  fab.classList.toggle("has-draft", on);
+  fab.setAttribute("aria-label", on ? "Continue your workout" : "Log a workout");
 }
 
 /* A half-logged session used to live only in memory, so swiping the app
@@ -444,6 +460,7 @@ export function saveDraft() {
     if (!draftHasContent(draft)) localStorage.removeItem(DRAFT_KEY);
     else localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
   } catch (e) { /* storage full or blocked -- the session still works */ }
+  renderFab();
 }
 
 export function restoreDraft() {
@@ -467,6 +484,7 @@ export function restoreDraft() {
     withIds: Array.isArray(saved.withIds) ? saved.withIds : [],
     exercises: saved.exercises
   };
+  renderFab();
   return true;
 }
 
@@ -555,9 +573,13 @@ function renderExerciseBlocks(containerEl, draftObj, rerender, excludeWorkoutId)
           (metric === "distance" ? '' : ' data-bump-ok="1"') + ' value="' + esc(v2) + '">' +
         '<button class="unit-toggle" data-unit-toggle>' + (s[unitKey] || cfg.units[0]) + '</button>';
       return '' +
-        '<div class="set-row' + (dur ? " has-duration" : "") + (noWt ? " no-weight" : "") +
+        '<div class="set-row' + (dur ? " has-duration" : "") + (noWt ? " no-weight" : "") + (s.drop ? " is-drop" : "") +
             '" data-ex="' + i + '" data-set="' + si + '">' +
-          '<span class="set-index">' + (si + 1) + '</span>' +
+          // a drop set shows an arrow where its number would be; tapping it makes the set a normal one again
+          (s.drop
+            ? '<button type="button" class="set-index is-drop" data-drop-off="' + i + ':' + si +
+                '" aria-label="Drop set. Tap to make it a normal set">↓</button>'
+            : '<span class="set-index">' + (si + 1) + '</span>') +
           firstCell +
           weightCells +
           '<button class="set-remove" data-remove-set="' + si + '" data-remove-set-ex="' + i + '" aria-label="Remove set ' + (si + 1) + '">&times;</button>' +
@@ -566,7 +588,10 @@ function renderExerciseBlocks(containerEl, draftObj, rerender, excludeWorkoutId)
 
     var noteOpen = blk.showNote || (blk.note && blk.note.length);
     var noteHtml = noteOpen
-      ? '<textarea class="note-input" rows="2" data-note="' + i + '" placeholder="How did it feel? Form cues, aches...">' + esc(blk.note || "") + '</textarea>'
+      ? '<div class="note-wrap">' +
+          '<textarea class="note-input" rows="2" data-note="' + i + '" placeholder="How did it feel? Form cues, aches...">' + esc(blk.note || "") + '</textarea>' +
+          '<button type="button" class="note-clear" data-clear-note="' + i + '" aria-label="Remove note">&times;</button>' +
+        '</div>'
       : '<button class="add-set-link" data-add-note="' + i + '">+ Note</button>';
 
     var prevBlk = draftObj.exercises[i - 1];
@@ -609,7 +634,11 @@ function renderExerciseBlocks(containerEl, draftObj, rerender, excludeWorkoutId)
         '</div>' +
         rows +
         '<div class="block-foot">' +
-          '<button class="add-set-link" data-add-set="' + i + '">+ Add set</button>' +
+          '<span class="foot-links">' +
+            '<button class="add-set-link" data-add-set="' + i + '">+ Add set</button>' +
+            (metric === "reps" && !noWt
+              ? '<button class="add-set-link" data-add-drop="' + i + '">+ Drop set</button>' : "") +
+          '</span>' +
           ssBtn +
         '</div>' +
         noteHtml +
@@ -647,6 +676,28 @@ function renderExerciseBlocks(containerEl, draftObj, rerender, excludeWorkoutId)
       };
       if (last.prefill) copy.prefill = true;   // still a suggestion until typed over
       blk.sets.push(copy);
+      rerender();
+    });
+  });
+  // a drop set: straight on from the set before it, with less weight. It
+  // starts as a copy of that set so only the weight needs lowering.
+  containerEl.querySelectorAll("[data-add-drop]").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var blk = draftObj.exercises[Number(btn.getAttribute("data-add-drop"))];
+      var last = blk.sets[blk.sets.length - 1] || {};
+      blk.sets.push({
+        reps: last.reps == null ? null : last.reps, seconds: null,
+        weight: last.weight == null ? null : last.weight, distance: null,
+        unit: last.unit || defaultUnit(), distUnit: last.distUnit || "mi", drop: true
+      });
+      rerender();
+    });
+  });
+  containerEl.querySelectorAll("[data-drop-off]").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var at = btn.getAttribute("data-drop-off").split(":");
+      var st = draftObj.exercises[Number(at[0])].sets[Number(at[1])];
+      if (st) delete st.drop;
       rerender();
     });
   });
@@ -773,6 +824,14 @@ function renderExerciseBlocks(containerEl, draftObj, rerender, excludeWorkoutId)
   containerEl.querySelectorAll("[data-add-note]").forEach(function (btn) {
     btn.addEventListener("click", function () {
       draftObj.exercises[Number(btn.getAttribute("data-add-note"))].showNote = true;
+      rerender();
+    });
+  });
+  containerEl.querySelectorAll("[data-clear-note]").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var blk = draftObj.exercises[Number(btn.getAttribute("data-clear-note"))];
+      blk.note = "";
+      blk.showNote = false;
       rerender();
     });
   });

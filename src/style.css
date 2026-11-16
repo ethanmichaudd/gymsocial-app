@@ -1235,7 +1235,9 @@
     background: var(--accent); display: flex; align-items: center; justify-content: center;
     box-shadow: 0 8px 20px -8px var(--accent);
   }
-  .auth-logo svg { width: 30px; height: 30px; stroke: var(--on-accent); }
+  .auth-logo svg { width: 34px; height: 34px; }
+  .auth-logo .logo-bubble { fill: var(--on-accent); }
+  .auth-logo .logo-bar { fill: none; stroke: var(--accent); }
   .auth-wordmark { font-size: 22px; font-weight: 800; letter-spacing: -0.02em; color: var(--text); }
   .auth-wordmark span { color: var(--accent); }
   .auth-title { font-size: 30px; font-weight: 800; letter-spacing: -0.025em; margin: 34px 0 6px; color: var(--text); }
@@ -1406,8 +1408,8 @@
   .draft-card-name { display: block; font-weight: 700; font-size: 15px; color: var(--text); margin-bottom: 2px; }
   .log-cancel { flex-shrink: 0; }
 
-  /* suggested from last time: lighter until you type over it */
-  .set-row input.is-prefill { color: var(--text-faint); }
+  /* filled in from last time: shown like anything you typed (is-prefill is
+     only how the code tells it apart) */
 
   /* weight bump chips, right under the weight box you're in */
   .bump-row { display: flex; gap: 6px; margin: -2px 0 8px 30px; }
@@ -1497,7 +1499,6 @@
     display: flex; align-items: center; min-height: 44px; padding: 0 12px; border-radius: var(--radius-sm);
     background: var(--accent-bg); color: var(--accent-strong); font-weight: 700; font-variant-numeric: tabular-nums;
   }
-  .cardio-grid input.is-prefill { color: var(--text-faint); }
   .cardio-icon { font-size: 0.95em; }
   .cal-day .cal-cardio path { fill: none; stroke: var(--accent); }
   .cal-day.selected .cal-cardio path { stroke: var(--on-accent); }
@@ -1879,3 +1880,50 @@
   .goal-fixed { font-size: 16px; font-weight: 700; padding: 4px 0; }
   /* 16px so iPhone doesn't zoom the page when the box takes focus */
   #goal-target, #goal-ex { font-size: 16px; }
+
+  /* ---------- sheets and the keyboard ----------
+     A sheet is never taller than the room left above the keyboard, so its
+     top (the title, a search box) can't end up off the top of the screen. */
+  .modal-overlay { top: var(--vvtop, 0px); }
+  .modal-sheet {
+    max-height: min(84dvh, calc(100dvh - var(--kb, 0px) - var(--vvtop, 0px) - env(safe-area-inset-top, 0px) - 10px));
+  }
+  /* the Friends search stays at the top of its sheet while the list scrolls */
+  .find-box.is-sticky {
+    position: sticky; top: 0; z-index: 3;
+    background: var(--surface); padding: 8px 0 6px; margin: -8px 0 4px;
+  }
+
+  /* ---------- drop sets ---------- */
+  .set-row .set-index.is-drop {
+    background: none; border: none; padding: 4px 0; margin: 0; cursor: pointer; text-align: left;
+    color: var(--accent-strong); font-size: 16px; font-weight: 700; line-height: 1; font-family: inherit;
+  }
+  .foot-links { display: flex; gap: 18px; }
+
+  /* ---------- remove a note ---------- */
+  .note-wrap { position: relative; }
+  .note-wrap .note-input { padding-right: 36px; }
+  .note-clear {
+    position: absolute; top: 11px; right: 2px; width: 32px; height: 32px;
+    background: none; border: none; padding: 0; cursor: pointer;
+    color: var(--text-faint); font-size: 19px; line-height: 1;
+  }
+  .note-clear:active { color: var(--danger); }
+
+  /* ---------- inbox: clear all ---------- */
+  .inbox-head { display: flex; align-items: center; justify-content: space-between; }
+  .inbox-clear {
+    background: none; border: none; padding: 4px 0; cursor: pointer; font-family: inherit;
+    color: var(--accent-strong); font-size: 13px; font-weight: 600; letter-spacing: 0; text-transform: none;
+  }
+
+  /* ---------- the + while a workout is in progress ---------- */
+  .tab-fab { position: relative; }
+  .tab-fab .fab-resume, .tab-fab .fab-dot { display: none; }
+  .tab-fab.has-draft .fab-plus { display: none; }
+  .tab-fab.has-draft .fab-resume { display: block; }
+  .tab-fab.has-draft .fab-dot {
+    display: block; position: absolute; top: 1px; right: 1px; width: 10px; height: 10px;
+    border-radius: 50%; background: var(--live); border: 2.5px solid var(--surface);
+  }

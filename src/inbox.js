@@ -29,7 +29,10 @@ function inboxSeen() {
 
 function inboxActivity() {
   if (!currentUser()) return [];
+  // "Clear all" hides everything up to that moment, on every phone
+  var cleared = state.settings.inboxClearedAt || "";
   return (state.inbox || []).filter(function (it) {
+    if (cleared && (!it.at || it.at <= cleared)) return false;
     // reactions, comments and tags point at a workout: skip any whose
     // workout has since been deleted
     if (!it.workoutId) return true;
@@ -94,7 +97,10 @@ function inboxHtml(seen) {
   }
 
   var items = inboxActivity();
-  if (items.length || requests.length) html += '<div class="manage-head">Activity</div>';
+  if (items.length || requests.length) {
+    html += '<div class="manage-head inbox-head"><span>Activity</span>' +
+      (items.length ? '<button type="button" class="inbox-clear" data-inbox-clear>Clear all</button>' : '') + '</div>';
+  }
   html += items.length ? items.map(function (it) {
     var u = findPerson(it.userId) || { id: it.userId, name: "Someone" };
     if (u.handle) knownPeople[u.id] = u;
@@ -151,8 +157,27 @@ function markInboxSeen() {
   renderBell();
 }
 
+/* Empties the activity list. Friend requests stay: they need an answer. */
+function clearInbox() {
+  var latest = new Date().toISOString();
+  inboxActivity().forEach(function (it) {
+    if (it.at && it.at > latest) latest = it.at;
+    // a tag nobody answered is answered by clearing it
+    if (it.kind === "tag" && !(state.settings.tagsDone || {})[it.workoutId]) settleTag(it.workoutId);
+  });
+  state.settings.inboxClearedAt = latest;
+  persist();
+  renderBell();
+}
+
 function drawInbox(el, seen) {
   el.innerHTML = inboxHtml(seen);
+  var clear = el.querySelector("[data-inbox-clear]");
+  if (clear) clear.addEventListener("click", function () {
+    clearInbox();
+    drawInbox(el, seen);
+    showToast("Inbox cleared.");
+  });
   el.querySelectorAll("[data-inbox-wk]").forEach(function (b) {
     b.addEventListener("click", function () { openWorkoutDetail(b.getAttribute("data-inbox-wk")); });
   });

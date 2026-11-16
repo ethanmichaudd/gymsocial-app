@@ -370,6 +370,7 @@ function workoutBasePrint(w) {
         if (s.intensity != null || s.heartRate != null || s.steps != null) {
           p.push(s.intensity ?? null, s.heartRate ?? null, s.steps ?? null);
         }
+        if (s.drop) p.push("drop");            // only when used, like the cardio extras
         return p;
       }),
     ]),
@@ -599,6 +600,8 @@ async function pushWorkout(w) {
   // set uses them, so lifting keeps syncing on a database without them.
   const cardioCols = w.exercises.some((b) => b.sets.some((s) =>
     s.intensity != null || s.heartRate != null || s.steps != null));
+  // Same idea for drop sets (supabase/011_drop_sets.sql).
+  const dropCol = w.exercises.some((b) => b.sets.some((s) => s.drop));
   const sets = [];
   w.exercises.forEach((b, i) => b.sets.forEach((s, n) => {
     const row = {
@@ -611,10 +614,17 @@ async function pushWorkout(w) {
       row.heart_rate = s.heartRate ?? null;
       row.steps = s.steps ?? null;
     }
+    if (dropCol) row.is_drop = Boolean(s.drop);
     sets.push(row);
   }));
   if (sets.length) {
-    const insS = await supabase.from("workout_sets").insert(sets);
+    let insS = await supabase.from("workout_sets").insert(sets);
+    if (dropCol && missingColumn(insS.error)) {
+      // before 011 has been run: the sets still go up, without the marker.
+      // This phone keeps it (keepDrops) and sends it once the column exists.
+      sets.forEach((r) => { delete r.is_drop; });
+      insS = await supabase.from("workout_sets").insert(sets);
+    }
     if (insS.error) throw insS.error;
   }
 }
@@ -745,6 +755,7 @@ async function pullAll() {
       // comments and tags arrive with the social pull, not with the workout row
       if (local.comments) incoming.comments = local.comments;
       if (local.withIds) incoming.withIds = local.withIds;
+      if (!rowKnowsDrops(r)) keepDrops(local, incoming);
       if (local.photoPath === incoming.photoPath && local.photoUrl) {
         incoming.photoUrl = local.photoUrl;
         incoming.photoUrlExpires = local.photoUrlExpires;
@@ -810,6 +821,19 @@ async function followMergedGyms(state, meta) {
   return true;
 }
 
+/* A database that hasn't run 011 has nowhere to keep "this was a drop set",
+   so what comes back has lost it. The copy on this phone still knows. */
+const rowKnowsDrops = (r) =>
+  (r.workout_exercises || []).some((b) => (b.workout_sets || []).some((s) => "is_drop" in s));
+
+function keepDrops(local, incoming) {
+  incoming.exercises.forEach((b, i) => {
+    const mine = (local.exercises || [])[i];
+    if (!mine || mine.exerciseId !== b.exerciseId || mine.sets.length !== b.sets.length) return;
+    b.sets.forEach((s, n) => { if (mine.sets[n].drop) s.drop = true; });
+  });
+}
+
 function workoutFromRow(r, state) {
   const blocks = (r.workout_exercises || []).slice().sort((a, b) => a.order_index - b.order_index);
   return {
@@ -835,6 +859,7 @@ function workoutFromRow(r, state) {
           intensity: s.intensity == null ? null : Number(s.intensity),
           heartRate: s.heart_rate ?? null,
           steps: s.steps ?? null,
+          ...(s.is_drop ? { drop: true } : {}),
         })),
       };
       if (b.equipment) out.equipment = b.equipment;
