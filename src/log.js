@@ -9,7 +9,7 @@ import {
   DEFAULT_EQUIPMENT, DEFAULT_METRIC, defaultUnit, detectPRs, dropsWeight, durationOf,
   endIsoFrom, equipmentList, esc, EXERCISE_CATEGORIES, featureOn, findExercise, findGym,
   findUser, FLAME_SVG, formatDuration, formatDurationLong, formatTime, friendsOf, gymAddress,
-  gymLabel, isoFromDateTime, joinDuration, lastSessionFor, loggedSetTime, metricOf, METRICS,
+  exerciseKey, gymLabel, isoFromDateTime, joinDuration, lastSessionFor, singularWord, loggedSetTime, metricOf, METRICS,
   myWorkouts, openConfirm, openListSheet, persist, repSetCount, sessionDistance, sessionVolume,
   shortDate, showToast, splitDuration, state, summarizeSets, tabBeforeLog, timeInputValue,
   titleCase, uid, usesDuration, usesEquipment, weightLabel, workoutById
@@ -542,12 +542,17 @@ function renderExerciseBlocks(containerEl, draftObj, rerender, excludeWorkoutId)
     var cfg = METRICS[metric];
     var unitKey = cfg.unitKey;
 
-    var last = lastSessionFor(blk.exerciseId, excludeWorkoutId);
+    // dumbbell and cable numbers aren't comparable, so "last time" is on
+    // the equipment picked here (sessions from before equipment was a
+    // choice count for any of them)
+    var onEquip = usesEquipment(metric) && blk.equipment ? blk.equipment : undefined;
+    var last = lastSessionFor(blk.exerciseId, excludeWorkoutId, onEquip);
+    var everLogged = onEquip !== undefined && !last && lastSessionFor(blk.exerciseId, excludeWorkoutId);
     var lastLine = last
-      ? '<div class="last-time">Last time <strong>' +
+      ? '<div class="last-time">Last time' + (onEquip ? " on " + esc(onEquip) : "") + ' <strong>' +
           esc(summarizeSets(last.block.sets, metricOf(last.block), last.block.equipment, exObj && exObj.name)) +
           '</strong> &middot; ' + shortDate(last.workout.performedAt) + '</div>'
-      : '<div class="last-time is-new">First time logging this</div>';
+      : '<div class="last-time is-new">' + (everLogged ? "First time on " + esc(onEquip) : "First time logging this") + '</div>';
 
     var dur = usesDuration(metric);
     var noWt = dropsWeight(blk, metric);
@@ -1214,24 +1219,12 @@ var EQUIP_WORDS = [
   [/\b(bodyweight|body\s+weight|bw)\b/i, "Bodyweight"]
 ];
 // what a bare word is short for once the equipment is taken off
+// Incline Bench is its own lift, not Incline Press (they used to be merged).
 var EXERCISE_ALIASES = { "bench": "Bench Press", "curl": "Bicep Curl", "bicep curl": "Bicep Curl",
-  "biceps curl": "Bicep Curl", "squat": "Back Squat", "row": "Bent-Over Row", "pulldown": "Lat Pulldown",
-  "incline bench": "Incline Press", "incline bench press": "Incline Press" };
+  "biceps curl": "Bicep Curl", "squat": "Back Squat", "row": "Bent-Over Row", "pulldown": "Lat Pulldown" };
 
-function singularWord(w) {
-  var l = w.toLowerCase();
-  if (/(ss|us|is)$/.test(l)) return w;                    // press, biceps -> leave
-  if (/(sh|ch|ss)es$/.test(l)) return w.slice(0, -2);     // pushes -> push
-  if (/ies$/.test(l) && l.length > 4) return w.slice(0, -3) + "y";   // flies -> fly
-  if (/[^s]s$/.test(l) && l.length > 3) return w.slice(0, -1);       // curls -> curl
-  return w;
-}
-
-// compare names loosely: case, plurals and "biceps"/"bicep" don't matter
-export function exerciseKey(name) {
-  return String(name || "").toLowerCase().replace(/[^a-z0-9 ]/g, " ").split(/\s+/)
-    .filter(Boolean).map(function (w) { return singularWord(w.replace(/s$/, "")); }).join(" ");
-}
+// exerciseKey lives in core.js now (lastSessionFor needs it); still exported from here for cardio.js
+export { exerciseKey };
 
 function parseExerciseName(raw) {
   var text = String(raw || "").trim();
@@ -1287,6 +1280,14 @@ function findOrCreateExercise(name) {
 export function migrateExerciseNames() {
   var changed = false;
   state.settings.retiredExercises = state.settings.retiredExercises || [];
+  // "Dumbbell Incline Bench" used to be folded into Incline Press. Bring it
+  // back; the clean-up below then files it under Incline Bench.
+  var before = state.settings.retiredExercises.length;
+  state.settings.retiredExercises = state.settings.retiredExercises.filter(function (id) {
+    var ex = state.exercises.filter(function (e) { return e.id === id; })[0];
+    return !(ex && /\bincline\s+bench\b/i.test(ex.name));
+  });
+  if (state.settings.retiredExercises.length !== before) changed = true;
   state.exercises.slice().forEach(function (ex) {
     if (retiredExercise(ex.id)) return;
     var parsed = parseExerciseName(ex.name);

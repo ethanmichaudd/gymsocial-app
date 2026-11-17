@@ -592,21 +592,58 @@ function initialsOf(name) {
 
 /* The most recent session containing this exercise, ignoring the one being
    edited so it never compares a workout against itself. */
+/* ---- exercise names, compared loosely ----
+   Case, plurals, "biceps"/"bicep" and "Bench"/"Bench Press" don't matter. */
+export function singularWord(w) {
+  var l = w.toLowerCase();
+  if (/(ss|us|is)$/.test(l)) return w;                    // press, biceps -> leave
+  if (/(sh|ch|ss)es$/.test(l)) return w.slice(0, -2);     // pushes -> push
+  if (/ies$/.test(l) && l.length > 4) return w.slice(0, -3) + "y";   // flies -> fly
+  if (/[^s]s$/.test(l) && l.length > 3) return w.slice(0, -1);       // curls -> curl
+  return w;
+}
+
+export function exerciseKey(name) {
+  return String(name || "").toLowerCase().replace(/[^a-z0-9 ]/g, " ").split(/\s+/)
+    .filter(Boolean).map(function (w) { return singularWord(w.replace(/s$/, "")); }).join(" ")
+    .replace(/\bbench pre\b/g, "bench");   // "press" comes out as "pre"
+}
+
+/* Every id that is really this exercise: the same name can exist twice
+   (made on two phones before they synced, or an older spelling). */
+function sameExerciseIds(exerciseId) {
+  var ex = findExercise(exerciseId);
+  if (!ex || ex.metric === "cardio") return [exerciseId];
+  var key = exerciseKey(ex.name);
+  var ids = state.exercises.filter(function (e) {
+    return e.metric !== "cardio" && exerciseKey(e.name) === key;
+  }).map(function (e) { return e.id; });
+  if (ids.indexOf(exerciseId) === -1) ids.push(exerciseId);
+  return ids;
+}
+
+/* The most recent time you did this exercise. With equipment, only on that
+   equipment; sessions saved before equipment was recorded count for any. */
 export function lastSessionFor(exerciseId, excludeWorkoutId, equipment) {
-  var found = null;
-  myWorkouts().forEach(function (wk) {
-    if (excludeWorkoutId && wk.id === excludeWorkoutId) return;
-    var blk = wk.exercises.filter(function (we) {
-      if (we.exerciseId !== exerciseId) return false;
-      // asked for a particular equipment: curls on a cable aren't a guide for dumbbells
-      return equipment === undefined || (we.equipment || null) === (equipment || null);
-    })[0];
-    if (!blk) return;
-    if (!found || new Date(wk.performedAt) > new Date(found.workout.performedAt)) {
-      found = { workout: wk, block: blk };
-    }
-  });
-  return found;
+  var ids = sameExerciseIds(exerciseId);
+  var pick = function (match) {
+    var found = null;
+    myWorkouts().forEach(function (wk) {
+      if (excludeWorkoutId && wk.id === excludeWorkoutId) return;
+      var blk = wk.exercises.filter(function (we) {
+        return ids.indexOf(we.exerciseId) !== -1 && match(we.equipment || null);
+      })[0];
+      if (!blk) return;
+      if (!found || new Date(wk.performedAt) > new Date(found.workout.performedAt)) {
+        found = { workout: wk, block: blk };
+      }
+    });
+    return found;
+  };
+  if (equipment === undefined) return pick(function () { return true; });
+  var want = equipment || null;
+  return pick(function (eq) { return eq === want; }) ||
+    (want ? pick(function (eq) { return eq === null; }) : null);
 }
 
 /* "3x8 @ 135lb", "3x45s", "2.0 mi in 18:30" -- collapses identical sets. */

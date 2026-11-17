@@ -122,7 +122,7 @@ for (const mode of [{ name: "light", theme: "light", legacy: false }, { name: "d
     }
     await page.click('[data-tab="home"]'); await page.waitForTimeout(300);
     await addExercise(page, "Back Squat"); await page.waitForTimeout(400);
-    check(T + "'Last time' shows the drop set with an arrow", /Last time 5 @ 225lb, ↓ 8 @ 185lb/.test(flat(await page.innerText("#exercise-blocks .last-time"))), flat(await page.innerText("#exercise-blocks .last-time")));
+    check(T + "'Last time' shows the drop set with an arrow", /Last time on Barbell 5 @ 225lb, ↓ 8 @ 185lb/.test(flat(await page.innerText("#exercise-blocks .last-time"))), flat(await page.innerText("#exercise-blocks .last-time")));
 
     // it survives another sync. The stand-in database doesn't keep what the app
     // uploads, so put the workout there the way the real one would hold it:
