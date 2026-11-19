@@ -243,6 +243,10 @@ export async function install(context, db) {
       }
       return json(route, rows);
     }
+    // before 012: no highlights column on workouts
+    if (table === "workouts" && method === "POST" && db.legacy && JSON.stringify(body).includes("highlights")) {
+      return json(route, { code: "PGRST204", message: "Could not find the 'highlights' column of 'workouts' in the schema cache" }, 400);
+    }
     // before 011: no is_drop column
     if (table === "workout_sets" && method === "POST" && db.legacy && JSON.stringify(body).includes("is_drop")) {
       return json(route, { code: "PGRST204", message: "Could not find the 'is_drop' column of 'workout_sets' in the schema cache" }, 400);

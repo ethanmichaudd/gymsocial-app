@@ -79,28 +79,32 @@ for (const theme of ["light", "dark"]) test(`Signed in (${theme})`, async ({ bro
   check(T + "accept called rpc", db.log.some((l) => l.path.endsWith("accept_friend_request")));
   await page.click("#list-modal-close");
 
-  // custom reaction in the feed
+  // custom reaction in the feed: the React arrow opens every choice
   await page.click('[data-tab="friends"]');
   await page.waitForTimeout(500);
-  const bar = page.locator(".friend-card .react-bar").first();
-  check(T + "bar = quick four + plus", (await bar.locator("button.react:not(.comment-chip)").count()) === 4 && (await bar.locator("input.react-add").count()) === 1);
+  const picker = async () => { await page.locator(".friend-card .feed-react-more").first().click(); await page.waitForTimeout(300); return page.locator("#list-modal-body .react-bar"); };
+  let bar = await picker();
+  check(T + "picker = quick four + plus", (await bar.locator("button.react").count()) === 4 && (await bar.locator("input.react-add").count()) === 1);
   await bar.locator("input.react-add").fill("ab");
   await page.waitForTimeout(200);
   check(T + "letters rejected", /Pick one emoji/.test(await page.innerText("#toast")) && !db.log.some((l) => l.path.endsWith("/reactions")));
-  await page.locator(".friend-card .react-bar input.react-add").first().fill("\u{1F389}\u{1F389}");
+  await page.locator("#list-modal-body input.react-add").fill("\u{1F389}\u{1F389}");
   await page.waitForTimeout(200);
   check(T + "two emoji rejected", !db.log.some((l) => l.path.endsWith("/reactions")));
-  await page.locator(".friend-card .react-bar input.react-add").first().fill("\u{1F44D}\u{1F3FD}");
+  await page.locator("#list-modal-body input.react-add").fill("\u{1F44D}\u{1F3FD}");
   await page.waitForTimeout(400);
   let mine = db.reactions.find((r) => r.user_id === ME);
   check(T + "custom emoji (skin tone) saved", !!mine && mine.emoji === "\u{1F44D}\u{1F3FD}", mine && mine.emoji);
-  check(T + "custom chip shown as mine", (await page.locator(".friend-card .react.is-mine").innerText()).includes("\u{1F44D}\u{1F3FD}"));
+  check(T + "custom emoji shown on my React button", (await page.locator(".friend-card .feed-react.is-mine").first().innerText()).includes("\u{1F44D}\u{1F3FD}"));
   await shot(page, `${theme}-4-feed`);
   // switch to a quick one: still one per person
-  await page.locator('.friend-card [data-react$="\u{1F525}"]').click();
+  bar = await picker();
+  await page.locator('#list-modal-body [data-react$="\u{1F525}"]').click();
   await page.waitForTimeout(400);
   check(T + "one reaction per person", db.reactions.filter((r) => r.user_id === ME).length === 1 && db.reactions.find((r) => r.user_id === ME).emoji === "\u{1F525}");
-  check(T + "unused custom chip disappears", (await page.locator(".friend-card .react-bar button.react:not(.comment-chip)").count()) === 4, String(await page.locator(".friend-card .react-bar button.react:not(.comment-chip)").count()));
+  bar = await picker();
+  check(T + "unused custom chip disappears", (await bar.locator("button.react").count()) === 4, String(await bar.locator("button.react").count()));
+  await page.click("#list-modal-close"); await page.waitForTimeout(200);
   // flag (two code points) through the detail sheet
   await page.locator(".friend-open").first().click();
   await page.waitForTimeout(300);
@@ -134,7 +138,8 @@ test("Database that hasn't run 007", async ({ browser: b }) => {
   await page.click("#list-modal-close");
   await page.click('[data-tab="friends"]');
   await page.waitForTimeout(400);
-  await page.locator(".friend-card .react-bar input.react-add").first().fill("\u{1F680}");
+  await page.locator(".friend-card .feed-react-more").first().click(); await page.waitForTimeout(300);
+  await page.locator("#list-modal-body input.react-add").fill("\u{1F680}");
   await page.waitForTimeout(400);
   check("pre-migration: custom reaction saves", db.reactions.some((r) => r.user_id === ME && r.emoji === "\u{1F680}"));
   check("pre-migration: no console errors", errors.length === 0, errors.join(" || "));

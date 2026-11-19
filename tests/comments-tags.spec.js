@@ -155,7 +155,7 @@ test("Database that hasn't run 009", async ({ browser: b }) => {
   browser = b;
   const { context, page, db, errors } = await open({ legacy9: true });
   await page.click('[data-tab="friends"]'); await page.waitForTimeout(500);
-  check("pre-009: no comment bubbles, reactions still there", (await page.locator(".comment-chip").count()) === 0 && (await page.locator(".friend-card .react-bar button.react").count()) === 4);
+  check("pre-009: no comment bubbles, reactions still there", (await page.locator(".comment-chip").count()) === 0 && (await page.locator(".friend-card .feed-react").count()) >= 1);
   await page.locator(".friend-open").first().click(); await page.waitForTimeout(300);
   check("pre-009: no comment box in a workout", (await page.locator("#comment-form").count()) === 0 && (await page.locator(".comments").count()) === 0);
   await page.click("#list-modal-close");

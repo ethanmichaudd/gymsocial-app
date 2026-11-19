@@ -1173,6 +1173,8 @@ function wireLogEvents() {
       exercises: cleanExercises
     };
     if (draft.photoData) workout.photoData = draft.photoData;
+    // saved with the workout so friends' feeds can show the record
+    if (prs.length) workout.prs = prs.map(function (p) { return { name: p.name, display: p.display, delta: p.delta || "" }; });
     if (featureOn("tags") && draft.withIds && draft.withIds.length) workout.withIds = draft.withIds.slice();
     state.workouts.push(workout);
     persist();

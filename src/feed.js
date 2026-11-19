@@ -13,9 +13,10 @@ import {
   findExercise, findGym, findPerson, findUser, formatDuration, formatDurationLong, formatTime,
   FRIENDS_SVG, friendsOf, gymAddress, gymLabel, localDayKey, loggedSetTime, metricOf,
   openConfirm, openListSheet, persist, prsAt, repSetCount, sessionDistance, sessionFacts,
-  sessionVolume, shortDate, showToast, signedOut, state, summarizeSets, workoutById,
+  sessionVolume, shortDate, showToast, signedOut, state, summarizeSets, weekStartOf, workoutById,
   workoutsOf, workoutTitleHtml
 } from "./core.js";
+import { liveFriends } from "./live.js";
 import { cardioTiles, isCardioWorkout } from "./cardio.js";
 import { openGymModal } from "./gyms.js";
 import { renderHome, renderHomeDay } from "./home.js";
@@ -111,7 +112,7 @@ function reactionOrder(wk) {
 /* The + is a text box dressed as a chip: tapping it brings up the keyboard
    with no script involved (iPhone only opens it from a real tap), and
    nothing is swapped in or out, so the row never shifts under a finger. */
-export function reactionBarHtml(wk) {
+export function reactionBarHtml(wk, noComments) {
   return '<div class="react-bar">' + reactionOrder(wk).map(function (e) {
     var n = reactionCount(wk, e);
     if (!n && REACTIONS.indexOf(e) === -1) return '';
@@ -122,7 +123,7 @@ export function reactionBarHtml(wk) {
     '<input class="react react-add" data-react-add="' + esc(wk.id) + '" type="text" placeholder="+" ' +
       'aria-label="React with any emoji" autocomplete="off" autocorrect="off" autocapitalize="off" ' +
       'spellcheck="false" enterkeyhint="done">' +
-    commentChipHtml(wk, false) +
+    (noComments ? '' : commentChipHtml(wk, false)) +
   '</div>';
 }
 
@@ -248,13 +249,324 @@ export function wireReactions(root, after) {
 var FEED_PAGE = 20;
 var feedShown = FEED_PAGE;
 
-function dayLabelFor(d) {
-  var key = localDayKey(d.toISOString());
-  var yesterday = new Date();
-  yesterday.setDate(yesterday.getDate() - 1);
-  if (key === localDayKey(new Date().toISOString())) return "Today";
-  if (key === localDayKey(yesterday.toISOString())) return "Yesterday";
-  return calendarDate(d.toISOString());
+
+/* ---- the feed, laid out like a social app ----
+   Top: who your friends are (a ring = trained today, green = at the gym
+   now) and this week's leaderboard. Then one card per workout: who, where,
+   when; the title; three numbers; the best lifts; the photo; who reacted;
+   the latest comment; and one row of actions. */
+
+var ADD_FRIEND_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" ' +
+  'stroke-linecap="round" stroke-linejoin="round"><circle cx="9.5" cy="8" r="3.6"/><path d="M3 20a6.5 6.5 0 0 1 13 0"/>' +
+  '<path d="M19 8v6M16 11h6"/></svg>';
+var SHARE_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" ' +
+  'stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V4M7.5 8.5 12 4l4.5 4.5"/><path d="M5 13v5.5A1.5 1.5 0 0 0 6.5 20h11a1.5 1.5 0 0 0 1.5-1.5V13"/></svg>';
+var CARET_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" ' +
+  'stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>';
+var DEFAULT_REACTION = REACTIONS[0];
+
+function firstName(u) {
+  if (!u) return "Someone";
+  if (u.id === state.me.id) return "You";
+  return String(u.name || "Someone").split(" ")[0];
+}
+
+/* Records a workout set. Yours are worked out here against your whole
+   history; a friend's come from their phone (saved with the workout),
+   because this phone only holds their last few months. */
+export function prsFor(wk) {
+  if (!wk) return [];
+  if (wk.userId === state.me.id) return prsAt(wk);
+  return Array.isArray(wk.prs) ? wk.prs : [];
+}
+
+/* this week, Sunday to now: [{ user, count, secs }], most workouts first */
+function weekBoard(friends) {
+  var start = weekStartOf(new Date()).getTime();
+  var people = [state.me].concat(friends);
+  return people.map(function (u) {
+    var wks = workoutsOf(u.id).filter(function (w) { return new Date(w.performedAt).getTime() >= start; });
+    var secs = wks.reduce(function (t, w) { return t + (durationOf(w) || loggedSetTime(w.exercises) || 0); }, 0);
+    return { user: u, count: wks.length, secs: secs };
+  }).sort(function (a, b) {
+    return b.count - a.count || b.secs - a.secs || String(a.user.name).localeCompare(String(b.user.name));
+  });
+}
+
+var MEDALS = ["🥇", "🥈", "🥉"];
+
+function friendStripHtml(friends) {
+  var live = {};
+  liveFriends().forEach(function (l) { live[l.user.id] = true; });
+  var todayKey = localDayKey(new Date().toISOString());
+  var lastAt = function (u) {
+    var w = workoutsOf(u.id).sort(function (a, b) { return new Date(b.performedAt) - new Date(a.performedAt); })[0];
+    return w ? new Date(w.performedAt).getTime() : 0;
+  };
+  var today = function (u) {
+    return workoutsOf(u.id).some(function (w) { return localDayKey(w.performedAt) === todayKey; });
+  };
+  var people = friends.slice().sort(function (a, b) {
+    return (live[b.id] ? 2 : today(b) ? 1 : 0) - (live[a.id] ? 2 : today(a) ? 1 : 0) || lastAt(b) - lastAt(a);
+  });
+  people.splice(Math.min(people.filter(function (u) { return live[u.id] || today(u); }).length, people.length), 0, state.me);
+  return '<div class="friend-strip">' + people.map(function (u) {
+    var cls = live[u.id] ? " is-live" : today(u) ? " is-today" : "";
+    return '<button class="strip-face' + cls + '" data-profile="' + esc(u.id) + '" aria-label="' +
+        esc(u.name) + (live[u.id] ? ", at the gym now" : today(u) ? ", trained today" : "") + '">' +
+      '<span class="strip-ring">' + avatarHtml(u) + '</span>' +
+      '<span class="strip-name">' + esc(firstName(u)) + '</span></button>';
+  }).join("") +
+    '<button class="strip-face is-invite" id="feed-invite" aria-label="Invite a friend">' +
+      '<span class="strip-ring"><span class="avatar strip-plus">+</span></span>' +
+      '<span class="strip-name">Invite</span></button>' +
+  '</div>';
+}
+
+function boardStripHtml(board) {
+  var top = board.filter(function (r) { return r.count; }).slice(0, 3);
+  return '<button class="board-strip" id="feed-board">' +
+    '<span class="board-label">This week</span>' +
+    '<span class="board-names">' + (top.length
+      ? top.map(function (r, i) {
+          return (i === 0 ? MEDALS[0] + " " : "") + '<strong>' + esc(firstName(r.user)) + '</strong> ' + r.count;
+        }).join(" &middot; ")
+      : "Nobody's trained yet. Be first.") + '</span>' +
+    '<span class="chevron">&rsaquo;</span></button>';
+}
+
+function openWeekBoard() {
+  var board = weekBoard(friendsOf(state.me.id));
+  var rank = 0, last = null;
+  var el = openListSheet("This week", '<p class="setting-help" style="margin-top:0;">Workouts since Sunday, you and your friends.</p>' +
+    board.map(function (r, i) {
+      if (r.count !== last) { rank = i + 1; last = r.count; }
+      var place = r.count && rank <= 3 ? MEDALS[rank - 1] : '<span class="board-rank">' + rank + '</span>';
+      return '<div class="board-row' + (r.user.id === state.me.id ? " is-me" : "") + '" data-profile="' + esc(r.user.id) + '">' +
+        '<span class="board-place">' + place + '</span>' + avatarHtml(r.user) +
+        '<span class="person-body"><span class="person-name">' + esc(r.user.id === state.me.id ? "You" : r.user.name) + '</span>' +
+          '<span class="person-sub">' + (r.secs ? esc(formatDurationLong(r.secs)) + ' trained' : 'No time logged') + '</span></span>' +
+        '<span class="board-count">' + r.count + '</span></div>';
+    }).join(""));
+  return el;
+}
+
+/* "Dev is on a 4-week streak": weeks in a row with at least one workout,
+   counting this one. Friends' history only goes back a few months here,
+   so this can only ever under-count, never claim too much. */
+function weeksInARow(userId) {
+  var weeks = {};
+  workoutsOf(userId).forEach(function (w) { weeks[weekStartOf(new Date(w.performedAt)).getTime()] = true; });
+  var cursor = weekStartOf(new Date()), n = 0;
+  while (weeks[cursor.getTime()]) { n++; cursor.setDate(cursor.getDate() - 7); cursor = weekStartOf(cursor); }
+  return n;
+}
+
+function milestonesHtml(friends) {
+  var rows = [];
+  friends.forEach(function (u) {
+    var n = weeksInARow(u.id);
+    if (n < 3) return;
+    var latest = workoutsOf(u.id).sort(function (a, b) { return new Date(b.performedAt) - new Date(a.performedAt); })[0];
+    rows.push({ u: u, n: n, wk: latest });
+  });
+  rows.sort(function (a, b) { return b.n - a.n; });
+  return rows.slice(0, 2).map(function (r) {
+    var mine = myReaction(r.wk);
+    return '<div class="milestone">' +
+      '<span class="milestone-icon">🔥</span>' +
+      '<span class="milestone-text" data-profile="' + esc(r.u.id) + '"><strong>' + esc(firstName(r.u)) + '</strong> is on a ' +
+        r.n + '-week streak</span>' +
+      '<button class="milestone-react' + (mine ? " is-mine" : "") + '" data-react="' + esc(r.wk.id) + '|' +
+        esc(mine || "🔥") + '">' + esc(mine || "🔥") + (mine ? " Sent" : " React") + '</button>' +
+    '</div>';
+  }).join("");
+}
+
+/* the three numbers that describe a workout at a glance */
+function statStripHtml(wk) {
+  var tiles;
+  if (isCardioWorkout(wk)) {
+    tiles = cardioTiles(wk).slice(0, 3);
+  } else {
+    var secs = durationOf(wk) || loggedSetTime(wk.exercises);
+    var sets = repSetCount(wk.exercises);
+    var vol = sessionVolume(wk.exercises);
+    tiles = [];
+    tiles.push(secs ? { value: formatDurationLong(secs), label: "Time" }
+                    : { value: wk.exercises.length, label: wk.exercises.length === 1 ? "Exercise" : "Exercises" });
+    if (sets) tiles.push({ value: sets, label: sets === 1 ? "Set" : "Sets" });
+    if (vol.lb) tiles.push({ value: Math.round(vol.lb).toLocaleString(), label: "Volume lb" });
+    else if (vol.kg) tiles.push({ value: Math.round(vol.kg).toLocaleString(), label: "Volume kg" });
+    else if (secs && tiles.length < 3) tiles.push({ value: wk.exercises.length, label: wk.exercises.length === 1 ? "Exercise" : "Exercises" });
+  }
+  if (!tiles.length) return "";
+  return '<div class="feed-stats">' + tiles.map(function (t) {
+    return '<span class="feed-stat"><span class="feed-stat-num">' + esc(String(t.value)) + '</span>' +
+      '<span class="feed-stat-label">' + esc(t.label) + '</span></span>';
+  }).join("") + '</div>';
+}
+
+/* "Bench Press 185×5 · Curl 35×10 🏆": each exercise's best set */
+function topLiftsHtml(wk, prs) {
+  var prNames = prs.map(function (p) { return p.name; });
+  var parts = [];
+  wk.exercises.forEach(function (blk) {
+    var m = metricOf(blk);
+    if (m === "cardio" || m === "distance") return;
+    var ex = findExercise(blk.exerciseId);
+    var name = ex ? ex.name : "Exercise";
+    var best = null;
+    blk.sets.forEach(function (st) {
+      if (m === "time") { if (st.seconds != null && (!best || st.seconds > best.seconds)) best = st; return; }
+      if (st.weight == null && st.reps == null) return;
+      if (!best || (st.weight || 0) > (best.weight || 0) ||
+          ((st.weight || 0) === (best.weight || 0) && (st.reps || 0) > (best.reps || 0))) best = st;
+    });
+    if (!best) return;
+    var val = m === "time" ? formatDuration(best.seconds)
+      : (best.weight != null ? best.weight + "×" + (best.reps == null ? "?" : best.reps) : "×" + best.reps);
+    parts.push({ html: esc(name) + ' <span class="num">' + esc(val) + '</span>' +
+      (prNames.indexOf(name) !== -1 ? ' <span class="pr-tag">🏆 PR</span>' : ''), pr: prNames.indexOf(name) !== -1 });
+  });
+  if (!parts.length) return "";
+  parts.sort(function (a, b) { return (b.pr ? 1 : 0) - (a.pr ? 1 : 0); });   // records first
+  var shown = parts.slice(0, 2).map(function (p) { return p.html; }).join(' &middot; ');
+  return '<div class="feed-lifts">' + shown + (parts.length > 2 ? ' <span class="feed-more">+' + (parts.length - 2) + '</span>' : '') + '</div>';
+}
+
+function prBannerHtml(prs) {
+  if (!prs.length) return "";
+  var p = prs[0];
+  return '<div class="feed-pr">🏆 <strong>New PR</strong> &middot; ' + esc(p.name) + ' ' + esc(p.display) +
+    (p.delta ? ' <span class="feed-pr-delta">(+' + esc(p.delta) + ')</span>' : '') +
+    (prs.length > 1 ? ' <span class="feed-more">+' + (prs.length - 1) + ' more</span>' : '') + '</div>';
+}
+
+/* "🔥💪 Maya and 2 others" */
+function reactLineHtml(wk) {
+  var all = reactionsOf(wk);
+  var emojis = [], ids = [];
+  reactionOrder(wk).forEach(function (e) {
+    var list = all[e] || [];
+    if (!list.length) return;
+    if (emojis.length < 3) emojis.push(e);
+    list.forEach(function (id) { if (ids.indexOf(id) === -1) ids.push(id); });
+  });
+  if (!ids.length) return "";
+  // you first, then friends by name
+  ids.sort(function (a, b) { return (b === state.me.id) - (a === state.me.id); });
+  var names = ids.map(function (id) { return firstName(findPerson(id) || { id: id, name: "Someone" }); });
+  var text = names.length === 1 ? names[0]
+    : names.length === 2 ? names[0] + " and " + names[1]
+    : names[0] + " and " + (names.length - 1) + " others";
+  return '<button class="feed-reacted" data-feed-open="' + esc(wk.id) + '">' +
+    '<span class="feed-reacted-emoji">' + esc(emojis.join("")) + '</span> ' + esc(text) + '</button>';
+}
+
+function commentPreviewHtml(wk) {
+  if (!featureOn("comments")) return "";
+  var list = wk.comments || [];
+  if (!list.length) return "";
+  var c = list[list.length - 1];
+  var who = c.userId === state.me.id ? "You" : firstName(findPerson(c.userId));
+  return '<button class="feed-comment" data-comments="' + esc(wk.id) + '">' +
+    (list.length > 1 ? '<span class="feed-comment-all">View all ' + list.length + ' comments</span>' : '') +
+    '<span class="feed-comment-line"><strong>' + esc(who) + '</strong> ' + esc(c.body) + '</span></button>';
+}
+
+/* React (tap for 💪, or hold / the arrow for any emoji) · Comment · Share */
+function actionBarHtml(wk) {
+  var mine = myReaction(wk);
+  var n = (wk.comments || []).length;
+  return '<div class="feed-actions">' +
+    '<span class="feed-react-group">' +
+      '<button class="feed-act feed-react' + (mine ? " is-mine" : "") + '" data-react="' + esc(wk.id) + '|' +
+        esc(mine || DEFAULT_REACTION) + '" aria-label="' + (mine ? "Remove your reaction" : "React") + '">' +
+        '<span class="feed-act-emoji">' + esc(mine || DEFAULT_REACTION) + '</span>' + (mine ? "Reacted" : "React") + '</button>' +
+      '<button class="feed-act feed-react-more" data-react-pick="' + esc(wk.id) + '" aria-label="Pick a reaction">' + CARET_SVG + '</button>' +
+    '</span>' +
+    (featureOn("comments")
+      ? '<button class="feed-act comment-chip" data-comments="' + esc(wk.id) + '" aria-label="' +
+          (n ? n + (n === 1 ? " comment" : " comments") : "Comment") + '">' + COMMENT_SVG +
+          (n ? '<span class="react-n">' + n + '</span>' : 'Comment') + '</button>'
+      : '') +
+    '<button class="feed-act feed-share" data-share="' + esc(wk.id) + '" aria-label="Share">' + SHARE_SVG + 'Share</button>' +
+  '</div>';
+}
+
+function feedCardHtml(row, nth) {
+  var wk = row.wk;
+  var gymObj = wk.gymId ? findGym(wk.gymId) : null;
+  var prs = prsFor(wk);
+  var withLine = withText(wk);
+  return '<article class="friend-card feed-card">' +
+    '<button class="friend-open" data-friend-wk="' + esc(wk.id) + '">' +
+      '<span class="profile-tap" data-profile="' + esc(row.user.id) + '">' + avatarHtml(row.user) + '</span>' +
+      '<span class="person-body">' +
+        '<span class="feed-who"><span class="person-name">' + esc(row.user.name) + '</span>' +
+          (nth ? '<span class="nth-tag">#' + nth + '</span>' : '') + '</span>' +
+        '<span class="feed-where">' + [gymObj ? esc(gymObj.name) : null, esc(agoShort(wk.performedAt))]
+          .filter(Boolean).join(' &middot; ') + '</span>' +
+      '</span>' +
+    '</button>' +
+    '<button class="feed-body" data-friend-wk="' + esc(wk.id) + '">' +
+      '<span class="feed-title">' + workoutTitleHtml(wk) + '</span>' +
+      (withLine ? '<span class="feed-with">' + esc(withLine) + '</span>' : '') +
+      statStripHtml(wk) +
+      prBannerHtml(prs) +
+      topLiftsHtml(wk, prs) +
+    '</button>' +
+    (photoSrc(wk)
+      ? '<button class="card-photo" data-friend-wk="' + esc(wk.id) + '">' +
+          '<img src="' + esc(photoSrc(wk)) + '" alt="" loading="lazy"></button>'
+      : '') +
+    reactLineHtml(wk) +
+    commentPreviewHtml(wk) +
+    actionBarHtml(wk) +
+  '</article>';
+}
+
+/* Every reaction, in a sheet: the quick four, any that were used, and the
+   + box for any emoji at all. Picking one closes it. */
+function openReactPicker(workoutId) {
+  var wk = workoutById(workoutId);
+  if (!wk) return;
+  var el = openListSheet("React", '<div class="react-picker">' + reactionBarHtml(wk, true) + '</div>' +
+    '<p class="setting-help">Tap + for any emoji. Tap yours again to take it back.</p>');
+  wireReactions(el, function () {
+    closeListSheet();
+    renderFriends();
+    renderHomeDay();
+  });
+}
+
+function wireFeedCards(el) {
+  // press and hold React for the full choice; the click that follows is ignored
+  el.querySelectorAll(".feed-react").forEach(function (btn) {
+    var timer = null, held = false;
+    var id = function () { return btn.getAttribute("data-react").split("|")[0]; };
+    btn.addEventListener("touchstart", function () {
+      held = false;
+      timer = setTimeout(function () { held = true; buzz(10); openReactPicker(id()); }, 450);
+    }, { passive: true });
+    ["touchend", "touchmove", "touchcancel"].forEach(function (ev) {
+      btn.addEventListener(ev, function () { clearTimeout(timer); });
+    });
+    btn.addEventListener("contextmenu", function (e) { e.preventDefault(); openReactPicker(id()); });
+    btn.addEventListener("click", function (e) {
+      if (held) { e.stopImmediatePropagation(); e.preventDefault(); held = false; }
+    }, true);
+  });
+  el.querySelectorAll("[data-react-pick]").forEach(function (btn) {
+    btn.addEventListener("click", function () { openReactPicker(btn.getAttribute("data-react-pick")); });
+  });
+  el.querySelectorAll("[data-share]").forEach(function (btn) {
+    btn.addEventListener("click", function () { openShareCard(btn.getAttribute("data-share")); });
+  });
+  el.querySelectorAll("[data-feed-open]").forEach(function (btn) {
+    btn.addEventListener("click", function () { openWorkoutDetail(btn.getAttribute("data-feed-open")); });
+  });
 }
 
 export function renderFriends() {
@@ -264,7 +576,8 @@ export function renderFriends() {
   var manageBtn = document.getElementById("friends-manage");
   manageBtn.hidden = signedOut();
   var waiting = ((state.friendRequests || {}).incoming || []).length;
-  manageBtn.textContent = waiting ? "Manage (" + waiting + ")" : "Manage";
+  manageBtn.innerHTML = ADD_FRIEND_SVG + (waiting ? '<span class="icon-badge">' + (waiting > 9 ? "9+" : waiting) + '</span>' : '');
+  manageBtn.setAttribute("aria-label", waiting ? "Friends, " + waiting + " requests" : "Add friends");
   if (!signedOut()) refreshSocial(false);   // throttled; redraws when it lands
   if (signedOut()) {
     document.getElementById("friends-sub").textContent = "";
@@ -277,17 +590,22 @@ export function renderFriends() {
     return;
   }
 
-  document.getElementById("friends-sub").textContent = friends.length
-    ? friends.length + (friends.length === 1 ? " friend" : " friends")
-    : "";
+  document.getElementById("friends-sub").textContent = "";
 
   if (!friends.length) {
-    el.innerHTML = '<div class="empty-state">No friends yet. Tap Manage to find people by username. ' +
-      'Their workouts show up here.</div>' +
+    el.innerHTML = '<div class="signin-card">' +
+      '<div class="signin-card-icon">' + FRIENDS_SVG + '</div>' +
+      '<div class="signin-card-title">Train with friends</div>' +
+      '<p class="signin-card-text">See their workouts, react, and keep each other going.</p>' +
       (waiting ? '<button class="btn btn-primary btn-block" id="feed-requests">' + waiting +
-        (waiting === 1 ? " friend request" : " friend requests") + '</button>' : '');
+        (waiting === 1 ? " friend request" : " friend requests") + '</button>' : '') +
+      '<button class="btn ' + (waiting ? "btn-ghost" : "btn-primary") + ' btn-block" id="feed-find" style="margin-top:8px;">Find friends</button>' +
+      '<button class="btn btn-ghost btn-block" id="feed-invite" style="margin-top:8px;">Invite a friend</button>' +
+    '</div>';
     var reqBtn = el.querySelector("#feed-requests");
     if (reqBtn) reqBtn.addEventListener("click", openFriendsManage);
+    el.querySelector("#feed-find").addEventListener("click", openFriendsManage);
+    el.querySelector("#feed-invite").addEventListener("click", function () { shareProfile(state.me); });
     return;
   }
 
@@ -297,57 +615,25 @@ export function renderFriends() {
   });
   rows.sort(function (a, b) { return new Date(b.wk.performedAt) - new Date(a.wk.performedAt); });
 
+  var html = friendStripHtml(friends) + boardStripHtml(weekBoard(friends)) + milestonesHtml(friends);
+
   if (!rows.length) {
-    el.innerHTML = '<div class="empty-state">None of your friends have logged anything yet.</div>';
-    return;
-  }
-
-  // how many sessions each person logged per day, to tag a second one as #2
-  var perDay = {};
-  rows.forEach(function (r) {
-    var k = r.user.id + "|" + localDayKey(r.wk.performedAt);
-    (perDay[k] = perDay[k] || []).push(r.wk.id);
-  });
-
-  var html = "";
-  var lastKey = null;
-  rows.slice(0, feedShown).forEach(function (row) {
-    var dayKey = localDayKey(row.wk.performedAt);
-    if (dayKey !== lastKey) {
-      html += '<div class="feed-day">' + esc(dayLabelFor(new Date(row.wk.performedAt))) + '</div>';
-      lastKey = dayKey;
+    html += '<div class="empty-state">None of your friends have logged anything yet.</div>';
+  } else {
+    // how many sessions each person logged per day, to tag a second one as #2
+    var perDay = {};
+    rows.forEach(function (r) {
+      var k = r.user.id + "|" + localDayKey(r.wk.performedAt);
+      (perDay[k] = perDay[k] || []).push(r.wk.id);
+    });
+    rows.slice(0, feedShown).forEach(function (row) {
+      var same = perDay[row.user.id + "|" + localDayKey(row.wk.performedAt)];
+      var nth = same.length > 1 ? same.length - same.indexOf(row.wk.id) : 0;
+      html += feedCardHtml(row, nth);
+    });
+    if (rows.length > feedShown) {
+      html += '<button class="btn btn-ghost btn-block" id="feed-more">Show more</button>';
     }
-    var gymObj = row.wk.gymId ? findGym(row.wk.gymId) : null;
-    var exCount = row.wk.exercises.length;
-    var same = perDay[row.user.id + "|" + dayKey];
-    var nth = same.length > 1 ? same.length - same.indexOf(row.wk.id) : 0;
-    html += '<div class="friend-card">' +
-      '<button class="friend-open" data-friend-wk="' + row.wk.id + '">' +
-        '<span class="profile-tap" data-profile="' + esc(row.user.id) + '">' + avatarHtml(row.user) + '</span>' +
-        '<span class="person-body">' +
-          '<span class="person-name">' + esc(row.user.name) +
-            (nth ? '<span class="nth-tag">#' + nth + '</span>' : '') + '</span>' +
-          '<span class="friend-what">' + workoutTitleHtml(row.wk) + '</span>' +
-          '<span class="person-sub">' +
-            [esc(formatTime(row.wk.performedAt)),
-             exCount + (exCount === 1 ? " exercise" : " exercises")]
-              .concat(sessionFacts(row.wk).map(esc))
-              .concat(gymObj ? [esc(gymLabel(gymObj))] : [])
-              .concat(withText(row.wk) ? [esc(withText(row.wk))] : [])
-              .join(' &middot; ') +
-          '</span>' +
-        '</span>' +
-        '<span class="chevron">&rsaquo;</span>' +
-      '</button>' +
-      (photoSrc(row.wk)
-        ? '<button class="card-photo" data-friend-wk="' + row.wk.id + '">' +
-            '<img src="' + esc(photoSrc(row.wk)) + '" alt="" loading="lazy"></button>'
-        : '') +
-      reactionBarHtml(row.wk) +
-    '</div>';
-  });
-  if (rows.length > feedShown) {
-    html += '<button class="btn btn-ghost btn-block" id="feed-more">Show more</button>';
   }
   el.innerHTML = html;
 
@@ -361,6 +647,9 @@ export function renderFriends() {
     feedShown += FEED_PAGE;
     renderFriends();
   });
+  el.querySelector("#feed-invite").addEventListener("click", function () { shareProfile(state.me); });
+  el.querySelector("#feed-board").addEventListener("click", openWeekBoard);
+  wireFeedCards(el);
   wireReactions(el, renderFriends);
 }
 

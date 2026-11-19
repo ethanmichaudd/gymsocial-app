@@ -1,0 +1,11 @@
+-- =========================================================================
+-- GymSocial — the Friends feed
+-- Run once in the Supabase SQL editor. Safe to re-run.
+--
+-- A workout carries the personal records it set, worked out on its owner's
+-- phone (which has their whole history), so friends' feeds can show
+-- "🏆 New PR · Bench Press 185lb". Friends can already read workouts
+-- (can_view), so this adds no new access: just a column.
+-- Until it's run, the app simply doesn't show friends' PRs.
+-- =========================================================================
+alter table public.workouts add column if not exists highlights jsonb;

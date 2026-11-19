@@ -354,6 +354,8 @@ function workoutPrint(w) {
   // tags only when there are some, so workouts synced before tagging existed
   // don't all look changed
   if (w.withIds && w.withIds.length) print.push(["with"].concat(w.withIds.slice().sort()));
+  // records too, only when there are some (older workouts' prints don't change)
+  if (w.prs && w.prs.length) print.push(["prs"].concat(w.prs.map((p) => p.name + "|" + p.display)));
   return JSON.stringify(print);
 }
 
@@ -575,11 +577,20 @@ async function pushGymPins(state) {
 }
 
 async function pushWorkout(w) {
-  const up = await supabase.from("workouts").upsert({
+  const row = {
     id: w.id, user_id: sync.user.id, gym_id: w.gymId || null, title: w.title || null,
     performed_at: w.performedAt, ended_at: w.endedAt || null, calories: w.calories ?? null,
     photo_path: w.photoPath || null,
-  });
+  };
+  // the records it set, so friends' feeds can show them (supabase/012_feed.sql);
+  // only sent when there are some, and dropped if the column isn't there yet
+  if (!sync.noHighlights && Array.isArray(w.prs) && w.prs.length) row.highlights = w.prs;
+  let up = await supabase.from("workouts").upsert(row);
+  if (up.error && row.highlights && missingColumn(up.error)) {
+    sync.noHighlights = true;
+    delete row.highlights;
+    up = await supabase.from("workouts").upsert(row);
+  }
   if (up.error) throw up.error;
 
   // Children are rewritten whole: simpler than diffing sets, and a session
@@ -755,6 +766,7 @@ async function pullAll() {
       // comments and tags arrive with the social pull, not with the workout row
       if (local.comments) incoming.comments = local.comments;
       if (local.withIds) incoming.withIds = local.withIds;
+      if (!incoming.prs && local.prs) incoming.prs = local.prs;   // before 012 the server can't hold them
       if (!rowKnowsDrops(r)) keepDrops(local, incoming);
       if (local.photoPath === incoming.photoPath && local.photoUrl) {
         incoming.photoUrl = local.photoUrl;
@@ -834,6 +846,17 @@ function keepDrops(local, incoming) {
   });
 }
 
+/* Records a workout set, as its owner's phone worked them out. Anything that
+   isn't the expected shape is dropped rather than drawn. */
+function cleanHighlights(h) {
+  if (!Array.isArray(h)) return undefined;
+  const out = h.filter((p) => p && typeof p.name === "string" && typeof p.display === "string")
+    .slice(0, 10)
+    .map((p) => ({ name: p.name.slice(0, 80), display: p.display.slice(0, 40),
+      delta: typeof p.delta === "string" ? p.delta.slice(0, 40) : "" }));
+  return out.length ? out : undefined;
+}
+
 function workoutFromRow(r, state) {
   const blocks = (r.workout_exercises || []).slice().sort((a, b) => a.order_index - b.order_index);
   return {
@@ -846,6 +869,7 @@ function workoutFromRow(r, state) {
     endedAt: r.ended_at ? new Date(r.ended_at).toISOString() : null,
     calories: r.calories,
     photoPath: r.photo_path || null,
+    prs: cleanHighlights(r.highlights),
     reactions: {},
     exercises: blocks.map((b) => {
       const out = {
