@@ -2072,3 +2072,18 @@
   .react-picker .react-bar { padding: 4px 0 0; gap: 8px; flex-wrap: wrap; }
   .react-picker .react { font-size: 22px; padding: 8px 11px; }
   .react-picker .react-bar input.react-add { width: 50px; height: 44px; font-size: 20px; }
+
+  /* leaderboard tabs */
+  .board-tabs { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; margin: 0 -2px 12px; padding: 0 2px; }
+  .board-tabs::-webkit-scrollbar { display: none; }
+  .board-tab {
+    flex: 0 0 auto; padding: 7px 11px; border-radius: 999px; cursor: pointer;
+    background: var(--surface-2); border: 1px solid var(--border); color: var(--text-muted);
+    font-family: inherit; font-size: 13px; font-weight: 700;
+  }
+  .board-tab.is-on { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  .board-range { margin-bottom: 8px; }
+  .board-help { margin: 4px 2px 8px; }
+  .board-count { white-space: nowrap; font-size: 17px; }
+  .board-row.is-me .avatar { background: var(--surface); }
+

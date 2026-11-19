@@ -9,7 +9,7 @@ import {
   sendFriendRequest, setReaction
 } from "./store.js";
 import {
-  activateTab, avatarHtml, buzz, calendarDate, closeListSheet, durationOf, esc, featureOn,
+  activateTab, avatarHtml, buzz, defaultUnit, calendarDate, closeListSheet, durationOf, esc, featureOn,
   findExercise, findGym, findPerson, findUser, formatDuration, formatDurationLong, formatTime,
   FRIENDS_SVG, friendsOf, gymAddress, gymLabel, localDayKey, loggedSetTime, metricOf,
   openConfirm, openListSheet, persist, prsAt, repSetCount, sessionDistance, sessionFacts,
@@ -280,16 +280,67 @@ export function prsFor(wk) {
   return Array.isArray(wk.prs) ? wk.prs : [];
 }
 
-/* this week, Sunday to now: [{ user, count, secs }], most workouts first */
-function weekBoard(friends) {
-  var start = weekStartOf(new Date()).getTime();
-  var people = [state.me].concat(friends);
-  return people.map(function (u) {
-    var wks = workoutsOf(u.id).filter(function (w) { return new Date(w.performedAt).getTime() >= start; });
-    var secs = wks.reduce(function (t, w) { return t + (durationOf(w) || loggedSetTime(w.exercises) || 0); }, 0);
-    return { user: u, count: wks.length, secs: secs };
+/* ---- leaderboards ----
+   Five ways to rank you and your friends, over this week or this month.
+   The feed shows one line for whichever you looked at last; the sheet
+   has them all. Streak ignores the range: it's weeks in a row, now. */
+var BOARDS = [
+  { id: "workouts", label: "Workouts" },
+  { id: "time",     label: "Time" },
+  { id: "volume",   label: "Volume" },
+  { id: "streak",   label: "Streak" },
+  { id: "cardio",   label: "Cardio" }
+];
+var LB_PER_KG = 2.20462, MI_PER_KM = 0.621371;
+
+function boardPrefs() {
+  var st = state.settings || {};
+  var kind = BOARDS.some(function (b) { return b.id === st.boardKind; }) ? st.boardKind : "workouts";
+  return { kind: kind, range: st.boardRange === "month" ? "month" : "week" };
+}
+
+function rangeStart(range) {
+  if (range === "month") { var d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1).getTime(); }
+  return weekStartOf(new Date()).getTime();
+}
+
+// one person's number on a board
+function boardValue(kind, userId, since) {
+  if (kind === "streak") return weeksInARow(userId);
+  var wks = workoutsOf(userId).filter(function (w) { return new Date(w.performedAt).getTime() >= since; });
+  if (kind === "workouts") return wks.length;
+  return wks.reduce(function (t, w) {
+    if (kind === "time") return t + (durationOf(w) || loggedSetTime(w.exercises) || 0);
+    if (kind === "volume") { var v = sessionVolume(w.exercises); return t + v.lb + v.kg * LB_PER_KG; }
+    var d = sessionDistance(w.exercises); return t + d.mi + d.km * MI_PER_KM;   // cardio, in miles
+  }, 0);
+}
+
+function boardText(kind, v, short) {
+  if (kind === "workouts") return String(v);
+  if (kind === "streak") return v + (short ? "w" : v === 1 ? " week" : " weeks");
+  if (kind === "time") {
+    if (!v) return "0m";
+    var h = Math.floor(v / 3600), m = Math.round((v % 3600) / 60);
+    if (!h) return m + "m";
+    return short ? h + "h" : h + "h" + (m ? " " + m + "m" : "");
+  }
+  if (kind === "volume") {
+    var kg = defaultUnit() === "kg";
+    var n = kg ? v / LB_PER_KG : v;
+    var txt = n >= 10000 ? (Math.round(n / 100) / 10) + "k" : Math.round(n).toLocaleString();
+    return txt + (short ? "" : kg ? " kg" : " lb");
+  }
+  return (Math.round(v * 10) / 10) + (short ? "" : " mi");
+}
+
+/* [{ user, value }], best first; you and your friends */
+function boardRows(kind, range, friends) {
+  var since = rangeStart(range);
+  return [state.me].concat(friends).map(function (u) {
+    return { user: u, value: boardValue(kind, u.id, since) };
   }).sort(function (a, b) {
-    return b.count - a.count || b.secs - a.secs || String(a.user.name).localeCompare(String(b.user.name));
+    return b.value - a.value || String(a.user.name).localeCompare(String(b.user.name));
   });
 }
 
@@ -323,31 +374,66 @@ function friendStripHtml(friends) {
   '</div>';
 }
 
-function boardStripHtml(board) {
-  var top = board.filter(function (r) { return r.count; }).slice(0, 3);
+function boardStripHtml(friends) {
+  var pref = boardPrefs();
+  var top = boardRows(pref.kind, pref.range, friends).filter(function (r) { return r.value > 0; }).slice(0, 3);
+  var board = BOARDS.filter(function (x) { return x.id === pref.kind; })[0];
+  var label = pref.kind === "streak" ? "Streak"
+    : (pref.kind === "workouts" ? "" : board.label + " · ") + (pref.range === "month" ? "This month" : "This week");
   return '<button class="board-strip" id="feed-board">' +
-    '<span class="board-label">This week</span>' +
+    '<span class="board-label">' + esc(label) + '</span>' +
     '<span class="board-names">' + (top.length
       ? top.map(function (r, i) {
-          return (i === 0 ? MEDALS[0] + " " : "") + '<strong>' + esc(firstName(r.user)) + '</strong> ' + r.count;
+          return (i === 0 ? MEDALS[0] + " " : "") + '<strong>' + esc(firstName(r.user)) + '</strong> ' +
+            esc(boardText(pref.kind, r.value, true));
         }).join(" &middot; ")
-      : "Nobody's trained yet. Be first.") + '</span>' +
+      : (pref.kind === "cardio" ? "No cardio logged yet." : "Nobody's on the board yet. Be first.")) + '</span>' +
     '<span class="chevron">&rsaquo;</span></button>';
 }
 
 function openWeekBoard() {
-  var board = weekBoard(friendsOf(state.me.id));
+  var pref = boardPrefs();
+  var rows = boardRows(pref.kind, pref.range, friendsOf(state.me.id));
   var rank = 0, last = null;
-  var el = openListSheet("This week", '<p class="setting-help" style="margin-top:0;">Workouts since Sunday, you and your friends.</p>' +
-    board.map(function (r, i) {
-      if (r.count !== last) { rank = i + 1; last = r.count; }
-      var place = r.count && rank <= 3 ? MEDALS[rank - 1] : '<span class="board-rank">' + rank + '</span>';
+  var help = {
+    workouts: "Workouts logged", time: "Time trained (workout length, or set times)",
+    volume: "Weight lifted: weight × reps, both hands counted", streak: "Weeks in a row with a workout, up to this one",
+    cardio: "Miles of cardio: runs, rides, rows and the rest"
+  }[pref.kind];
+  var html =
+    '<div class="board-tabs" role="tablist">' + BOARDS.map(function (x) {
+      return '<button class="board-tab' + (x.id === pref.kind ? " is-on" : "") + '" role="tab" aria-selected="' +
+        (x.id === pref.kind) + '" data-board="' + x.id + '">' + x.label + '</button>';
+    }).join("") + '</div>' +
+    (pref.kind === "streak" ? '' :
+      '<div class="segmented board-range">' +
+        '<button class="seg-btn' + (pref.range === "week" ? " selected" : "") + '" data-board-range="week">This week</button>' +
+        '<button class="seg-btn' + (pref.range === "month" ? " selected" : "") + '" data-board-range="month">This month</button>' +
+      '</div>') +
+    '<p class="setting-help board-help">' + esc(help) + ', you and your friends.</p>' +
+    rows.map(function (r, i) {
+      if (r.value !== last) { rank = i + 1; last = r.value; }
+      var place = r.value > 0 && rank <= 3 ? MEDALS[rank - 1] : '<span class="board-rank">' + rank + '</span>';
       return '<div class="board-row' + (r.user.id === state.me.id ? " is-me" : "") + '" data-profile="' + esc(r.user.id) + '">' +
         '<span class="board-place">' + place + '</span>' + avatarHtml(r.user) +
-        '<span class="person-body"><span class="person-name">' + esc(r.user.id === state.me.id ? "You" : r.user.name) + '</span>' +
-          '<span class="person-sub">' + (r.secs ? esc(formatDurationLong(r.secs)) + ' trained' : 'No time logged') + '</span></span>' +
-        '<span class="board-count">' + r.count + '</span></div>';
-    }).join(""));
+        '<span class="person-body"><span class="person-name">' + esc(r.user.id === state.me.id ? "You" : r.user.name) + '</span></span>' +
+        '<span class="board-count">' + esc(boardText(pref.kind, r.value, false)) + '</span></div>';
+    }).join("");
+  var el = openListSheet("Leaderboards", html);
+  var on = el.querySelector(".board-tab.is-on");
+  if (on && on.scrollIntoView) on.scrollIntoView({ block: "nearest", inline: "center" });
+  var choose = function (key, val) {
+    state.settings[key] = val;       // remembered, and the feed line follows it
+    persist();
+    openWeekBoard();
+    renderFriends();
+  };
+  el.querySelectorAll("[data-board]").forEach(function (x) {
+    x.addEventListener("click", function () { choose("boardKind", x.getAttribute("data-board")); });
+  });
+  el.querySelectorAll("[data-board-range]").forEach(function (x) {
+    x.addEventListener("click", function () { choose("boardRange", x.getAttribute("data-board-range")); });
+  });
   return el;
 }
 
@@ -615,7 +701,7 @@ export function renderFriends() {
   });
   rows.sort(function (a, b) { return new Date(b.wk.performedAt) - new Date(a.wk.performedAt); });
 
-  var html = friendStripHtml(friends) + boardStripHtml(weekBoard(friends)) + milestonesHtml(friends);
+  var html = friendStripHtml(friends) + boardStripHtml(friends) + milestonesHtml(friends);
 
   if (!rows.length) {
     html += '<div class="empty-state">None of your friends have logged anything yet.</div>';

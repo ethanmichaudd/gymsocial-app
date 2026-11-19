@@ -58,8 +58,29 @@ for (const theme of ["light", "dark"]) test(`Feed, signed in (${theme})`, async 
   await page.click("#feed-board"); await page.waitForTimeout(300);
   const sheet = flat(await page.innerText("#list-modal-body"));
   check(T + "leaderboard sheet ranks everyone, you included", (await page.locator(".board-row").count()) === 3 && /You/.test(sheet) && /Maya Jensen/.test(sheet) && /Dev Patel/.test(sheet), sheet);
+  check(T + "five boards to pick from", (await page.locator(".board-tab").allInnerTexts()).join(",") === "Workouts,Time,Volume,Streak,Cardio");
+  const rowsText = async () => (await page.locator(".board-row").allInnerTexts()).map(flat);
+  await page.click('[data-board="time"]'); await page.waitForTimeout(300);
+  let r = await rowsText();
+  check(T + "Time board: 55m each, ties share the medal, Dev last", r.some((x) => /^🥇 MJ Maya Jensen 55m$/.test(x)) && /^3 DP Dev Patel 0m$/.test(r[2]), r.join(" | "));
   await shot(page, `feed-${theme}-2-board`);
+  await page.click('[data-board="volume"]'); await page.waitForTimeout(300);
+  r = await rowsText();
+  check(T + "Volume board: Maya 2,350 lb", r.some((x) => /Maya Jensen 2,350 lb$/.test(x)), r.join(" | "));
+  await page.click('[data-board-range="month"]'); await page.waitForTimeout(300);
+  r = await rowsText();
+  check(T + "This month adds my Leg Day (26h ago) when it's this month", r.length === 3, r.join(" | "));
+  await page.click('[data-board="streak"]'); await page.waitForTimeout(300);
+  check(T + "Streak board has no week/month switch", (await page.locator("[data-board-range]").count()) === 0);
+  await page.click('[data-board="cardio"]'); await page.waitForTimeout(300);
+  r = await rowsText();
+  check(T + "Cardio board: everyone at 0 mi, no medals", r.every((x) => /0 mi$/.test(x) && !/🥇/.test(x)), r.join(" | "));
+  await page.click('[data-board="volume"]'); await page.waitForTimeout(300);
   await page.click("#list-modal-close"); await page.waitForTimeout(200);
+  const strip2 = flat(await page.innerText("#feed-board"));
+  check(T + "feed line follows the last board picked", /^Volume · This month/i.test(strip2) && /Maya 2,350/.test(strip2), strip2);
+  const saved = await page.evaluate(() => JSON.parse(localStorage.getItem("gymsocial_v1")).settings);
+  check(T + "choice remembered", saved.boardKind === "volume" && saved.boardRange === "month", JSON.stringify(saved).slice(0, 200));
 
   // ---- the card ----
   const card = page.locator(".feed-card").first();
