@@ -17,6 +17,7 @@ import {
 } from "./core.js";
 import { migrateCardio, startCardio } from "./cardio.js";
 import { openWorkoutDetail, processPendingAdd, setAuthResolved, startFeed } from "./feed.js";
+import { startGestures } from "./gestures.js";
 import { startGyms } from "./gyms.js";
 import { renderHome, startHome } from "./home.js";
 import { openInbox, renderBell, startInbox } from "./inbox.js";
@@ -48,6 +49,7 @@ startProfile();
 startProgress();
 startLog4();
 startCore4();
+startGestures();
 
 /* ----------------------------- boot ----------------------------- */
 

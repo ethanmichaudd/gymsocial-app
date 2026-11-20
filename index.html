@@ -86,21 +86,11 @@
         <input type="text" id="log-title" placeholder="e.g. Push Day">
       </div>
 
-      <div class="field">
-        <label class="field-label" for="log-calories">Calories burned (optional)</label>
-        <input type="number" inputmode="numeric" id="log-calories" placeholder="From your watch or tracker">
-      </div>
-
-      <div class="field">
-        <label class="field-label">Photo (optional)</label>
-        <div class="photo-field" id="log-photo"></div>
-      </div>
-
       <div id="exercise-blocks"></div>
       <button class="add-exercise-btn" id="add-exercise-btn">+ Add Exercise</button>
       <button class="btn btn-ghost btn-block add-cardio-btn" id="add-cardio-btn">+ Add Cardio</button>
 
-      <button class="btn btn-primary btn-block" id="save-workout-btn">Save Workout</button>
+      <button class="btn btn-primary btn-block" id="finish-workout-btn">Finish workout</button>
     </section>
 
     <!-- PROGRESS -->
@@ -354,6 +344,26 @@
       <button class="btn btn-ghost" id="confirm-no">Cancel</button>
       <button class="btn btn-primary" id="confirm-yes">Remove</button>
     </div>
+  </div>
+</div>
+
+<!-- FINISH WORKOUT: the things that belong at the end -->
+<div class="modal-overlay" id="finish-overlay" style="z-index:24;">
+  <div class="modal-sheet">
+    <div class="modal-head">
+      <h2 style="font-size:19px;">Finish workout</h2>
+      <button class="modal-close" id="finish-close">Not yet</button>
+    </div>
+    <div class="finish-summary" id="finish-summary"></div>
+    <div class="field">
+      <label class="field-label">Photo (optional)</label>
+      <div class="photo-field" id="log-photo"></div>
+    </div>
+    <div class="field">
+      <label class="field-label" for="log-calories">Calories burned (optional)</label>
+      <input type="number" inputmode="numeric" id="log-calories" placeholder="From your watch or tracker">
+    </div>
+    <button class="btn btn-primary btn-block" id="save-workout-btn">Save workout</button>
   </div>
 </div>
 

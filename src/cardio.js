@@ -8,7 +8,7 @@ import {
   myWorkouts, openListSheet, pad2, persist, shortDate, showToast, splitDuration, state,
   titleCase, uid
 } from "./core.js";
-import { draft, exerciseKey, renderLog, retiredExercise } from "./log.js";
+import { DRAG_SVG, draft, exerciseKey, renderLog, retiredExercise } from "./log.js";
 
 /* ---- cardio: what each activity asks for ----
    dist: the units its distance can be in (null = no distance at all)
@@ -154,7 +154,9 @@ export function cardioBlockHtml(blk, i, exObj, standalone, excludeWorkoutId) {
 
   return '<div class="exercise-block is-cardio" data-cardio-block="' + i + '">' +
     (standalone ? '' :
-      '<div class="exercise-block-head"><h3 class="ex-name">' + prof.icon + ' ' + esc(name) + '</h3>' +
+      '<div class="exercise-block-head">' +
+        '<button type="button" class="drag-handle" data-drag="' + i + '" aria-label="Drag to reorder">' + DRAG_SVG + '</button>' +
+        '<h3 class="ex-name">' + prof.icon + ' ' + esc(name) + '</h3>' +
         '<button class="btn-danger-text" data-remove-ex="' + i + '">Remove</button></div>') +
     rail + lastLine +
     '<div class="cardio-grid">' + grid + '</div>' +

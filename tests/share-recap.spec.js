@@ -163,7 +163,7 @@ test("Signed out", async ({ browser: b }) => {
   await page.waitForTimeout(300);
   const inputs = page.locator("#exercise-blocks input");
   await inputs.nth(0).fill("5"); await inputs.nth(1).fill("225");
-  await page.click("#save-workout-btn"); await page.waitForTimeout(700);
+  await page.click("#finish-workout-btn"); await page.waitForTimeout(250); await page.click("#save-workout-btn"); await page.waitForTimeout(700);
   const saved = /Share as a picture/.test(await page.innerText("#list-modal-body").catch(() => ""));
   check("signed out: the after-save summary offers Share", saved, await page.innerText("#toast"));
   if (saved) {

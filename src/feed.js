@@ -21,7 +21,8 @@ import { cardioTiles, isCardioWorkout } from "./cardio.js";
 import { openGymModal } from "./gyms.js";
 import { renderHome, renderHomeDay } from "./home.js";
 import { agoShort } from "./inbox.js";
-import { openEditWorkout, startReuse, supersetLabels } from "./log.js";
+import { addBlockToDraft, openEditWorkout, startReuse, supersetLabels } from "./log.js";
+import { wireSwipeRows } from "./gestures.js";
 import { authNote, openAuth } from "./settings.js";
 
 /* Four is enough to say something without turning into a keyboard. */
@@ -1216,17 +1217,25 @@ export function openWorkoutDetail(workoutId, opts) {
     var exObj = findExercise(blk.exerciseId);
     var prev = wk.exercises[i - 1];
     var linked = blk.superset && prev && prev.superset === blk.superset;
-    return '<div class="detail-ex' + (linked ? " is-linked" : "") + '">' +
+    // swipe left (or hold, or ⋯) for: Add to workout, and Edit on your own
+    return '<div class="swipe-row detail-ex-row' + (linked ? " is-linked" : "") + '">' +
+      '<div class="swipe-actions">' +
+        '<button class="swipe-act is-add" data-ex-add="' + i + '">+ Add to workout</button>' +
+        (mine ? '<button class="swipe-act is-edit" data-ex-edit="' + i + '">Edit</button>' : '') +
+      '</div>' +
+      '<div class="swipe-front detail-ex' + (linked ? " is-linked" : "") + '">' +
       '<div class="detail-ex-head">' +
         '<span class="detail-ex-name">' +
           (ssLabels[i] ? '<span class="detail-ss">' + ssLabels[i] + '</span>' : '') +
           esc(exObj ? exObj.name : "Exercise") + '</span>' +
         (blk.equipment ? '<span class="detail-ex-eq">' + esc(blk.equipment) + '</span>' : '') +
+        '<button type="button" class="ex-more" data-swipe-more aria-label="More for ' + esc(exObj ? exObj.name : "this exercise") + '">' +
+          '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="19" cy="12" r="1.9"/></svg></button>' +
       '</div>' +
       '<div class="detail-ex-sets num">' +
         esc(summarizeSets(blk.sets, metricOf(blk), blk.equipment, exObj && exObj.name)) + '</div>' +
       (blk.note ? '<div class="detail-ex-note">' + esc(blk.note) + '</div>' : '') +
-    '</div>';
+    '</div></div>';
   }).join("");
 
   if (mine) {
@@ -1258,6 +1267,16 @@ export function openWorkoutDetail(workoutId, opts) {
     var thread = el.querySelector(".comments");
     if (thread && thread.scrollIntoView) thread.scrollIntoView({ block: "nearest" });
   }
+  wireSwipeRows(el);
+  el.querySelectorAll("[data-ex-add]").forEach(function (b) {
+    b.addEventListener("click", function () { addBlockToDraft(wk, Number(b.getAttribute("data-ex-add"))); });
+  });
+  el.querySelectorAll("[data-ex-edit]").forEach(function (b) {
+    b.addEventListener("click", function () {
+      closeListSheet();
+      openEditWorkout(workoutId, Number(b.getAttribute("data-ex-edit")));
+    });
+  });
   if (mine) {
     el.querySelector("#detail-edit").addEventListener("click", function () {
       closeListSheet();

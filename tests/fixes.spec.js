@@ -105,7 +105,7 @@ for (const mode of [{ name: "light", theme: "light", legacy: false }, { name: "d
 
     // ---- save ----
     db.log.length = 0;
-    await page.click("#save-workout-btn"); await page.waitForTimeout(900);
+    await page.click("#finish-workout-btn"); await page.waitForTimeout(250); await page.click("#save-workout-btn"); await page.waitForTimeout(900);
     if (await page.locator("#confirm-overlay.open").count()) await page.click("#confirm-no");
     await page.click("#summary-done").catch(() => {});
     await page.waitForTimeout(2600);

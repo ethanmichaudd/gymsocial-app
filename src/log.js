@@ -19,6 +19,7 @@ import {
   lastActivityName, wireCardioBlocks
 } from "./cardio.js";
 import { openShareCard } from "./feed.js";
+import { wireDragReorder } from "./gestures.js";
 import { goalsReachedBy } from "./goals.js";
 import { knownGym, openGymFinder } from "./gyms.js";
 import { openDraftChoice, renderHome } from "./home.js";
@@ -214,6 +215,65 @@ export function addTaggedToLog(workoutId) {
   startReuse(wk, { sameSession: true });
 }
 
+/* An exercise from any workout -- yours or a friend's -- as a block for
+   one of yours: matched to your own exercise of that name, its numbers as
+   the lighter suggestions. null if the exercise can't be named. */
+export function copyBlock(blk, mine) {
+  var ex = findExercise(blk.exerciseId);
+  var exId = blk.exerciseId;
+  var equip = blk.equipment || null;
+  var own = mine && state.exercises.some(function (e) { return e.id === exId; }) && !retiredExercise(exId);
+  if (blk.metric === "cardio") {
+    // a friend's run becomes your Run
+    if (!own) { if (!ex) return null; exId = ensureActivity(ex.name).id; }
+    equip = null;
+  } else if (!own) {
+    if (!ex) return null;
+    var parsed = parseExerciseName(ex.name);
+    exId = findOrCreateExercise(parsed ? parsed.base : ex.name).id;
+    if (!equip && parsed) equip = parsed.equipment;
+  }
+  if (equip) ensureEquipment(equip);
+  var out = {
+    exerciseId: exId, metric: metricOf(blk), equipment: equip,
+    sets: blk.sets.map(function (st) {
+      var o = { reps: st.reps == null ? null : st.reps, seconds: st.seconds == null ? null : st.seconds,
+        weight: st.weight == null ? null : st.weight, distance: st.distance == null ? null : st.distance,
+        unit: st.unit || "lb", distUnit: st.distUnit || "mi",
+        intensity: st.intensity == null ? null : st.intensity,
+        heartRate: st.heartRate == null ? null : st.heartRate,
+        steps: st.steps == null ? null : st.steps, prefill: true };
+      if (st.drop) o.drop = true;
+      return o;
+    })
+  };
+  if (blk.superset) out.superset = blk.superset;
+  return out;
+}
+
+/* Swipe an exercise in any workout and tap "Add to workout": it joins the
+   one you're logging (or starts one), and you stay where you were. */
+export function addBlockToDraft(wk, index) {
+  var blk = wk && wk.exercises[index];
+  var out = blk ? copyBlock(blk, wk.userId === state.me.id) : null;
+  if (!out) { showToast("Couldn’t copy that one."); return; }
+  delete out.superset;
+  var ex = findExercise(out.exerciseId);
+  if (draft.kind === "cardio") {
+    var cur = draft.exercises[0];
+    var untouched = !cur || cur.sets.every(function (st) {
+      return st.prefill || (st.seconds == null && st.distance == null && st.steps == null && st.heartRate == null);
+    });
+    if (out.metric === "cardio" && untouched) draft.exercises = [];
+    else setLogKind("lift");
+  }
+  draft.exercises.push(out);
+  persist();
+  saveDraft();
+  renderFab();
+  showToast("Added " + (ex ? ex.name : "it") + " to your workout.");
+}
+
 export function startReuse(wk, opts) {
   var go = function () {
     var mine = wk.userId === state.me.id;
@@ -223,38 +283,7 @@ export function startReuse(wk, opts) {
     // into the box now: rendering the log saves the draft from what's on screen
     document.getElementById("log-title").value = draft.title;
     if (wk.gymId && state.gyms.some(function (g) { return g.id === wk.gymId; })) draft.gymId = wk.gymId;
-    draft.exercises = wk.exercises.map(function (blk) {
-      var ex = findExercise(blk.exerciseId);
-      var exId = blk.exerciseId;
-      var equip = blk.equipment || null;
-      var own = mine && state.exercises.some(function (e) { return e.id === exId; }) && !retiredExercise(exId);
-      if (blk.metric === "cardio") {
-        // a friend's run becomes your Run
-        if (!own) { if (!ex) return null; exId = ensureActivity(ex.name).id; }
-        equip = null;
-      } else if (!own) {
-        if (!ex) return null;
-        var parsed = parseExerciseName(ex.name);
-        exId = findOrCreateExercise(parsed ? parsed.base : ex.name).id;
-        if (!equip && parsed) equip = parsed.equipment;
-      }
-      if (equip) ensureEquipment(equip);
-      var out = {
-        exerciseId: exId, metric: metricOf(blk), equipment: equip,
-        sets: blk.sets.map(function (st) {
-          var o = { reps: st.reps == null ? null : st.reps, seconds: st.seconds == null ? null : st.seconds,
-            weight: st.weight == null ? null : st.weight, distance: st.distance == null ? null : st.distance,
-            unit: st.unit || "lb", distUnit: st.distUnit || "mi",
-            intensity: st.intensity == null ? null : st.intensity,
-            heartRate: st.heartRate == null ? null : st.heartRate,
-            steps: st.steps == null ? null : st.steps, prefill: true };
-          if (st.drop) o.drop = true;
-          return o;
-        })
-      };
-      if (blk.superset) out.superset = blk.superset;
-      return out;
-    }).filter(Boolean);
+    draft.exercises = wk.exercises.map(function (blk) { return copyBlock(blk, mine); }).filter(Boolean);
     if (opts && opts.sameSession) {
       draft.date = dateInputValue(wk.performedAt);
       draft.startTime = timeInputValue(wk.performedAt);
@@ -314,7 +343,7 @@ function openReusePicker() {
 export var editingId = null;
 export var editDraft = { gymId: "", exercises: [] };
 
-export function openEditWorkout(workoutId) {
+export function openEditWorkout(workoutId, focusIndex) {
   var wk = state.workouts.filter(function (w) { return w.id === workoutId; })[0];
   if (!wk || wk.userId !== state.me.id) return;
 
@@ -350,6 +379,16 @@ export function openEditWorkout(workoutId) {
   document.getElementById("edit-calories").value = wk.calories == null ? "" : wk.calories;
   renderEditModal();
   document.getElementById("edit-modal-overlay").classList.add("open");
+  if (focusIndex != null) {
+    var target = document.querySelectorAll("#edit-exercise-blocks .exercise-block")[focusIndex];
+    if (target) {
+      setTimeout(function () {
+        target.scrollIntoView({ block: "center" });
+        target.classList.add("is-flash");
+        setTimeout(function () { target.classList.remove("is-flash"); }, 1400);
+      }, 220);
+    }
+  }
 }
 
 function closeEditWorkout() {
@@ -520,6 +559,52 @@ export function supersetLabels(exercises) {
   });
 }
 
+export var DRAG_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M5 8h14M5 12h14M5 16h14"/></svg>';
+var MORE_SVG = '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="19" cy="12" r="1.9"/></svg>';
+
+/* Move one exercise from one place to another. A superset only survives
+   if its members are still next to each other. */
+function moveBlock(draftObj, from, to) {
+  var b = draftObj.exercises.splice(from, 1)[0];
+  draftObj.exercises.splice(to, 0, b);
+  normalizeSupersets(draftObj.exercises);
+}
+
+/* ⋯ on an exercise: move it, copy it, or take it out. */
+function openExerciseMenu(draftObj, i, rerender) {
+  var blk = draftObj.exercises[i];
+  var ex = findExercise(blk.exerciseId);
+  var n = draftObj.exercises.length;
+  var item = function (act, label, cls, off) {
+    return '<button class="menu-row' + (cls ? " " + cls : "") + '" data-menu="' + act + '"' + (off ? " disabled" : "") + '>' + label + '</button>';
+  };
+  var el = openListSheet(ex ? ex.name : "Exercise",
+    '<div class="menu-list">' +
+      item("up", "Move up", "", i === 0) +
+      item("down", "Move down", "", i === n - 1) +
+      item("dup", "Duplicate") +
+      item("remove", "Remove exercise", "is-danger") +
+    '</div>' +
+    (n > 1 ? '<p class="setting-help">Or hold the &#8801; handle and drag it.</p>' : ''));
+  el.querySelectorAll("[data-menu]").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var act = btn.getAttribute("data-menu");
+      if (act === "up") moveBlock(draftObj, i, i - 1);
+      else if (act === "down") moveBlock(draftObj, i, i + 1);
+      else if (act === "dup") {
+        var copy = JSON.parse(JSON.stringify(blk));
+        delete copy.superset;
+        draftObj.exercises.splice(i + 1, 0, copy);
+      } else if (act === "remove") {
+        draftObj.exercises.splice(i, 1);
+        normalizeSupersets(draftObj.exercises);    // removal can orphan a group too
+      }
+      closeListSheet();
+      rerender();
+    });
+  });
+}
+
 function renderExerciseBlocks(containerEl, draftObj, rerender, excludeWorkoutId) {
   if (!draftObj.exercises.length) {
     containerEl.innerHTML = '<div class="empty-state">No exercises added yet. Tap "+ Add Exercise" below.</div>';
@@ -612,9 +697,11 @@ function renderExerciseBlocks(containerEl, draftObj, rerender, excludeWorkoutId)
       '<div class="exercise-block' + (blk.superset ? " in-superset" : "") + '">' +
         (ssLabels[i] ? '<span class="ss-tag">' + ssLabels[i] + '</span>' : "") +
         '<div class="exercise-block-head">' +
+          (draftObj.exercises.length > 1
+            ? '<button type="button" class="drag-handle" data-drag="' + i + '" aria-label="Drag to reorder">' + DRAG_SVG + '</button>' : '') +
           '<h3 class="ex-name" data-rename="' + i + '" title="Tap to rename">' +
             esc(exObj ? exObj.name : "Exercise") + '<span class="ex-pencil">&#9998;</span></h3>' +
-          '<button class="btn-danger-text" data-remove-ex="' + i + '">Remove</button></div>' +
+          '<button type="button" class="ex-menu-btn" data-ex-menu="' + i + '" aria-label="More for this exercise">' + MORE_SVG + '</button></div>' +
         lastLine +
         '<div class="metric-switch">' +
           ["reps", "time", "distance"].map(function (m) {
@@ -666,6 +753,16 @@ function renderExerciseBlocks(containerEl, draftObj, rerender, excludeWorkoutId)
     if (sel) rail.scrollLeft = sel.offsetLeft - (rail.clientWidth - sel.offsetWidth) / 2;
   });
 
+  containerEl.querySelectorAll("[data-ex-menu]").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      openExerciseMenu(draftObj, Number(btn.getAttribute("data-ex-menu")), rerender);
+    });
+  });
+  wireDragReorder(containerEl, ".exercise-block", "[data-drag]", function (from, to) {
+    moveBlock(draftObj, from, to);
+    buzz(8);
+    rerender();
+  });
   containerEl.querySelectorAll("[data-remove-ex]").forEach(function (btn) {
     btn.addEventListener("click", function () {
       draftObj.exercises.splice(Number(btn.getAttribute("data-remove-ex")), 1);
@@ -1146,6 +1243,8 @@ function wireLogEvents() {
     });
   };
 
+  document.getElementById("finish-workout-btn").onclick = openFinish;
+
   document.getElementById("save-workout-btn").onclick = function () {
     if (!draft.exercises.length) { showToast("Add at least one exercise first."); return; }
     var cleanExercises = cleanDraftExercises(draft);
@@ -1153,6 +1252,7 @@ function wireLogEvents() {
       showToast(draft.kind === "cardio" ? "Add a time or distance first." : "Fill in at least one set.");
       return;
     }
+    closeFinish();
 
     // Work out PRs against your history BEFORE this session joins it.
     var prs = detectPRs(cleanExercises, null);
@@ -1186,6 +1286,42 @@ function wireLogEvents() {
     openSessionSummary(workout, prs);
     maybeAskNotifications();
   };
+}
+
+/* Finish workout: everything that only makes sense at the end -- a photo,
+   calories from your watch -- in one sheet, then Save. Checks first that
+   there's something to save, so the sheet never opens on nothing. */
+function openFinish() {
+  if (!draft.exercises.length) { showToast("Add at least one exercise first."); return; }
+  var clean = cleanDraftExercises(draft);
+  if (!clean.length) {
+    showToast(draft.kind === "cardio" ? "Add a time or distance first." : "Fill in at least one set.");
+    return;
+  }
+  var title = document.getElementById("log-title").value.trim() ||
+    (draft.kind === "cardio" ? ((findExercise(clean[0].exerciseId) || {}).name || "Cardio") : "Workout");
+  var start = isoFromDateTime(draft.date, draft.startTime);
+  var end = defaultEndIso(draft);
+  var secs = end ? Math.round((new Date(end) - new Date(start)) / 1000) : null;
+  var sets = repSetCount(clean);
+  var bits = [clean.length + (clean.length === 1 ? " exercise" : " exercises")];
+  if (sets) bits.push(sets + (sets === 1 ? " set" : " sets"));
+  document.getElementById("finish-summary").innerHTML =
+    '<div class="finish-title">' + esc(title) + '</div>' +
+    '<div class="finish-when">' + esc(calendarDate(start)) + ' &middot; ' + esc(formatTime(start)) +
+      (end ? ' &ndash; ' + esc(formatTime(end)) + (secs >= 60 ? ' &middot; ' + esc(formatDurationLong(secs)) : '') : '') +
+      ' <button type="button" class="text-link" id="finish-edit-times">Edit</button></div>' +
+    '<div class="finish-what">' + esc(bits.join(" \u00b7 ")) + '</div>';
+  document.getElementById("finish-edit-times").onclick = function () {
+    closeFinish();
+    var f = document.getElementById("log-start");
+    if (f) f.scrollIntoView({ block: "center" });
+  };
+  document.getElementById("finish-overlay").classList.add("open");
+}
+
+function closeFinish() {
+  document.getElementById("finish-overlay").classList.remove("open");
 }
 
 var exercisePickerCallback = null;
@@ -1598,6 +1734,10 @@ export function startLog2() {
 export function startLog3() {
   /* Cancel leaves the log screen. With nothing typed it just goes back;
      with a workout in progress it asks first, so a stray tap loses nothing. */
+  document.getElementById("finish-close").addEventListener("click", closeFinish);
+  document.getElementById("finish-overlay").addEventListener("click", function (e) {
+    if (e.target.id === "finish-overlay") closeFinish();
+  });
   document.getElementById("log-cancel").addEventListener("click", function () {
     saveDraft();
     var back = function () { activateTab(tabBeforeLog || "home"); };

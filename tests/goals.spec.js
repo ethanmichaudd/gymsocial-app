@@ -75,7 +75,7 @@ for (const theme of ["light", "dark"]) test(`Signed in (${theme})`, async ({ bro
 
   // ---- reach it ----
   await logSet(page, "Back Squat", 3, 290);          // 290 x (1 + 3/30) = 319
-  await page.click("#save-workout-btn"); await page.waitForTimeout(900);
+  await page.click("#finish-workout-btn"); await page.waitForTimeout(250); await page.click("#save-workout-btn"); await page.waitForTimeout(900);
   if (await page.locator("#confirm-overlay.open").count()) await page.click("#confirm-no");
   const summary = flat(await page.innerText("#list-modal-body"));
   check(T + "the after-save sheet says the goal was reached", /Goal reached Back Squat 315 lb estimated 1RM/i.test(summary), summary.slice(0, 260));
@@ -127,7 +127,7 @@ test("Signed out", async ({ browser: b }) => {
   await page.click("#list-modal-close");
   await page.click("#progress-done");
   await logSet(page, "Back Squat", 5, 200);
-  await page.click("#save-workout-btn"); await page.waitForTimeout(700);
+  await page.click("#finish-workout-btn"); await page.waitForTimeout(250); await page.click("#save-workout-btn"); await page.waitForTimeout(700);
   await page.click("#summary-done");
   await page.click('#profile-stats [data-stat="progress"]'); await page.waitForTimeout(300);
   await page.click("#goal-add"); await page.waitForTimeout(300);

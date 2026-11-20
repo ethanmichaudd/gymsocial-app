@@ -122,7 +122,7 @@ for (const theme of ["light", "dark"]) test(`Signed in (${theme})`, async ({ bro
     await page.locator('[data-untag="' + DEV + '"]').click();
     check(T + "tap a chip to untag", flat(await page.innerText("#log-with")) === "MJ Maya × + Tag a friend");
     await page.click("#log-with-add"); await page.locator(".tag-row", { hasText: "Dev Patel" }).click(); await page.click("#tag-done");
-    await page.click("#save-workout-btn");
+    await page.click("#finish-workout-btn"); await page.waitForTimeout(250); await page.click("#save-workout-btn");
     await page.waitForTimeout(3000);
     const tagPosts = db.log.filter((l) => l.method === "POST" && l.path.endsWith("/workout_tags"));
     const mineNew = db.log.filter((l) => l.method === "POST" && l.path.endsWith("/workouts")).pop();

@@ -2087,3 +2087,70 @@
   .board-count { white-space: nowrap; font-size: 17px; }
   .board-row.is-me .avatar { background: var(--surface); }
 
+  /* ---------- gestures ---------- */
+  /* a grab bar on every bottom sheet: it can be pulled down to close */
+  .modal-overlay:not(.is-dialog) .modal-sheet { position: relative; }
+  .modal-overlay:not(.is-dialog) .modal-sheet::before {
+    content: ""; position: absolute; top: 7px; left: 50%; transform: translateX(-50%);
+    width: 38px; height: 5px; border-radius: 3px; background: var(--border);
+  }
+
+  /* exercise rows in a workout: swipe left for buttons */
+  .swipe-row { position: relative; overflow: hidden; }
+  .swipe-actions {
+    position: absolute; top: 0; right: 0; bottom: 0; display: flex; align-items: stretch;
+  }
+  .swipe-act {
+    border: 0; cursor: pointer; padding: 0 16px; font-family: inherit; font-size: 13.5px; font-weight: 700;
+    color: var(--on-accent); background: var(--accent); white-space: nowrap;
+  }
+  .swipe-act.is-edit { background: var(--text-muted); }
+  .swipe-front { position: relative; background: var(--surface); transition: transform .2s ease; touch-action: pan-y; }
+  .detail-ex-row.is-linked { margin-top: -4px; }
+  .detail-ex-head { display: flex; align-items: center; gap: 8px; }
+  .ex-more {
+    margin-left: auto; flex-shrink: 0; width: 34px; height: 28px; display: flex; align-items: center; justify-content: center;
+    background: none; border: 0; border-radius: 8px; color: var(--text-faint); cursor: pointer; padding: 0;
+  }
+  .ex-more svg { width: 18px; height: 18px; }
+  .ex-more:active { background: var(--surface-2); }
+
+  /* log screen: drag an exercise by its handle; ⋯ for the rest */
+  .drag-handle {
+    flex-shrink: 0; width: 30px; height: 30px; margin: -4px 2px -4px -6px; padding: 0;
+    display: flex; align-items: center; justify-content: center; background: none; border: 0;
+    color: var(--text-faint); cursor: grab; touch-action: none; border-radius: 8px;
+  }
+  .drag-handle svg { width: 18px; height: 18px; }
+  .drag-handle:active { background: var(--surface-2); cursor: grabbing; }
+  .ex-menu-btn {
+    flex-shrink: 0; margin-left: auto; width: 34px; height: 30px; padding: 0; display: flex; align-items: center; justify-content: center;
+    background: none; border: 0; border-radius: 8px; color: var(--text-muted); cursor: pointer;
+  }
+  .ex-menu-btn svg { width: 19px; height: 19px; }
+  .ex-menu-btn:active { background: var(--surface-2); }
+  .exercise-block.is-dragging {
+    position: relative; z-index: 5; box-shadow: 0 12px 28px -10px rgba(0,0,0,0.35);
+    transition: none !important; opacity: 0.97;
+  }
+  .is-reordering { user-select: none; -webkit-user-select: none; }
+  .exercise-block.is-flash { animation: ex-flash 1.4s ease; }
+  @keyframes ex-flash { 0%, 40% { box-shadow: 0 0 0 3px var(--accent); } 100% { box-shadow: 0 0 0 0 transparent; } }
+  @media (prefers-reduced-motion: reduce) { .exercise-block.is-flash { animation: none; box-shadow: 0 0 0 3px var(--accent); } }
+  .menu-list { display: flex; flex-direction: column; }
+  .menu-row {
+    text-align: left; padding: 14px 4px; background: none; border: 0; border-bottom: 1px solid var(--border-soft);
+    font-family: inherit; font-size: 15.5px; font-weight: 600; color: var(--text); cursor: pointer;
+  }
+  .menu-row:disabled { color: var(--text-faint); cursor: default; }
+  .menu-row.is-danger { color: var(--danger); border-bottom: 0; }
+
+  /* Finish workout */
+  .finish-summary { padding: 4px 0 14px; margin-bottom: 14px; border-bottom: 1px solid var(--border-soft); }
+  .finish-title { font-size: 20px; font-weight: 800; color: var(--text); }
+  .finish-when { font-size: 13.5px; color: var(--text-muted); margin-top: 3px; }
+  .finish-what { font-size: 13px; color: var(--text-faint); margin-top: 2px; }
+  #finish-workout-btn { margin-top: 6px; }
+
+  .exercise-block-head { justify-content: flex-start; gap: 6px; }
+  .exercise-block-head .btn-danger-text { margin-left: auto; }
