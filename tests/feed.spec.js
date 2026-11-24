@@ -47,7 +47,18 @@ for (const theme of ["light", "dark"]) test(`Feed, signed in (${theme})`, async 
 
   // ---- friend strip ----
   const strip = await page.$$eval(".friend-strip .strip-face", (els) => els.map((e) => e.querySelector(".strip-name").textContent + (e.classList.contains("is-live") ? "*live" : e.classList.contains("is-today") ? "*today" : "")));
-  check(T + "strip: Maya first (at the gym now), you, Dev, then Invite", strip.join(",") === "Maya*live,You,Dev,Invite", strip.join(","));
+  check(T + "strip: you first, then Maya (at the gym now), Dev, then Invite", strip.join(",") === "You,Maya*live,Dev,Invite", strip.join(","));
+  // your own workouts are in the feed too, with Edit where React would be
+  const myCard = page.locator(".feed-card", { has: page.locator(".person-name", { hasText: /^You$/ }) }).first();
+  check(T + "your own workout is in the feed, named You", (await myCard.count()) === 1);
+  check(T + "your card: Edit instead of React, still Comment and Share", (await myCard.locator(".feed-edit").count()) === 1 && (await myCard.locator(".feed-react").count()) === 0 && (await myCard.locator(".feed-share").count()) === 1);
+  await myCard.locator(".feed-edit").scrollIntoViewIfNeeded();
+  await myCard.locator(".feed-edit").click(); await page.waitForTimeout(400);
+  check(T + "Edit opens it for editing", await page.evaluate(() => document.getElementById("edit-modal-overlay").classList.contains("open")));
+  await shot(page, `feed-${theme}-mine-edit`);
+  await page.click("#edit-modal-overlay .modal-close"); await page.waitForTimeout(300);
+  if (await page.locator("#confirm-overlay.open").count()) { await page.click("#confirm-ok"); await page.waitForTimeout(200); }
+  await page.evaluate(() => window.scrollTo(0, 0));
   await page.locator('.strip-face[data-profile="' + DEV + '"]').click(); await page.waitForTimeout(300);
   check(T + "a face opens that person's profile", /Dev Patel/.test(await page.innerText("#list-modal-body")) && /@devp/.test(await page.innerText("#list-modal-body")));
   await page.click("#list-modal-close"); await page.waitForTimeout(200);

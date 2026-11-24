@@ -39,9 +39,9 @@ for (const theme of ["light", "dark"]) test(`Signed in (${theme})`, async ({ bro
   await page.waitForTimeout(500);
   const card = flat(await page.locator(".friend-card").first().innerText());
   check(T + "feed card says who they trained with", /with you/.test(card), card);
-  check(T + "feed card shows the comment count", (await page.locator(".friend-card .comment-chip .react-n").innerText()) === "1");
+  check(T + "feed card shows the comment count", (await page.locator(".friend-card >> nth=0 >> .comment-chip .react-n").innerText()) === "1");
   await shot(page, `p3-${theme}-1-feed`);
-  await page.click(".friend-card .comment-chip");
+  await page.click(".friend-card >> nth=0 >> .comment-chip");
   await page.waitForTimeout(400);
   let body = flat(await page.innerText("#list-modal-body"));
   check(T + "speech bubble opens the workout with its thread", /COMMENTS \(1\) DP Dev Patel 1h nice session/i.test(body), body);
@@ -68,7 +68,7 @@ for (const theme of ["light", "dark"]) test(`Signed in (${theme})`, async ({ bro
   await page.waitForTimeout(500);
   check(T + "deleting my comment removes it everywhere", !db.comments.some((c) => c.user_id === ME) && (await page.locator("#list-modal-body .comment").count()) === 1);
   await page.click("#list-modal-close");
-  check(T + "feed count back to 1", (await page.locator(".friend-card .comment-chip .react-n").innerText()) === "1");
+  check(T + "feed count back to 1", (await page.locator(".friend-card >> nth=0 >> .comment-chip .react-n").innerText()) === "1");
 
   // ---------- comments: my own workout ----------
   await page.click('[data-tab="profile"]');

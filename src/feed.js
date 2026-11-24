@@ -262,6 +262,8 @@ var ADD_FRIEND_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
   '<path d="M19 8v6M16 11h6"/></svg>';
 var SHARE_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" ' +
   'stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V4M7.5 8.5 12 4l4.5 4.5"/><path d="M5 13v5.5A1.5 1.5 0 0 0 6.5 20h11a1.5 1.5 0 0 0 1.5-1.5V13"/></svg>';
+var EDIT_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" ' +
+  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4z"/><path d="M13.5 6.5l4 4"/></svg>';
 var CARET_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" ' +
   'stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>';
 var DEFAULT_REACTION = REACTIONS[0];
@@ -361,11 +363,12 @@ function friendStripHtml(friends) {
   var people = friends.slice().sort(function (a, b) {
     return (live[b.id] ? 2 : today(b) ? 1 : 0) - (live[a.id] ? 2 : today(a) ? 1 : 0) || lastAt(b) - lastAt(a);
   });
-  people.splice(Math.min(people.filter(function (u) { return live[u.id] || today(u); }).length, people.length), 0, state.me);
+  people.unshift(state.me);            // you first, like your own story
   return '<div class="friend-strip">' + people.map(function (u) {
     var cls = live[u.id] ? " is-live" : today(u) ? " is-today" : "";
+    if (u.id === state.me.id) cls += " is-me";
     return '<button class="strip-face' + cls + '" data-profile="' + esc(u.id) + '" aria-label="' +
-        esc(u.name) + (live[u.id] ? ", at the gym now" : today(u) ? ", trained today" : "") + '">' +
+        esc(u.id === state.me.id ? "You" : u.name) + (live[u.id] ? ", at the gym now" : today(u) ? ", trained today" : "") + '">' +
       '<span class="strip-ring">' + avatarHtml(u) + '</span>' +
       '<span class="strip-name">' + esc(firstName(u)) + '</span></button>';
   }).join("") +
@@ -566,13 +569,16 @@ function commentPreviewHtml(wk) {
 function actionBarHtml(wk) {
   var mine = myReaction(wk);
   var n = (wk.comments || []).length;
+  var own = wk.userId === state.me.id;
   return '<div class="feed-actions">' +
-    '<span class="feed-react-group">' +
+    (own
+      ? '<button class="feed-act feed-edit" data-feed-edit="' + esc(wk.id) + '" aria-label="Edit workout">' + EDIT_SVG + 'Edit</button>'
+      : '<span class="feed-react-group">' +
       '<button class="feed-act feed-react' + (mine ? " is-mine" : "") + '" data-react="' + esc(wk.id) + '|' +
         esc(mine || DEFAULT_REACTION) + '" aria-label="' + (mine ? "Remove your reaction" : "React") + '">' +
         '<span class="feed-act-emoji">' + esc(mine || DEFAULT_REACTION) + '</span>' + (mine ? "Reacted" : "React") + '</button>' +
       '<button class="feed-act feed-react-more" data-react-pick="' + esc(wk.id) + '" aria-label="Pick a reaction">' + CARET_SVG + '</button>' +
-    '</span>' +
+    '</span>') +
     (featureOn("comments")
       ? '<button class="feed-act comment-chip" data-comments="' + esc(wk.id) + '" aria-label="' +
           (n ? n + (n === 1 ? " comment" : " comments") : "Comment") + '">' + COMMENT_SVG +
@@ -591,7 +597,7 @@ function feedCardHtml(row, nth) {
     '<button class="friend-open" data-friend-wk="' + esc(wk.id) + '">' +
       '<span class="profile-tap" data-profile="' + esc(row.user.id) + '">' + avatarHtml(row.user) + '</span>' +
       '<span class="person-body">' +
-        '<span class="feed-who"><span class="person-name">' + esc(row.user.name) + '</span>' +
+        '<span class="feed-who"><span class="person-name">' + esc(row.user.id === state.me.id ? "You" : row.user.name) + '</span>' +
           (nth ? '<span class="nth-tag">#' + nth + '</span>' : '') + '</span>' +
         '<span class="feed-where">' + [gymObj ? esc(gymObj.name) : null, esc(agoShort(wk.performedAt))]
           .filter(Boolean).join(' &middot; ') + '</span>' +
@@ -651,6 +657,9 @@ function wireFeedCards(el) {
   el.querySelectorAll("[data-share]").forEach(function (btn) {
     btn.addEventListener("click", function () { openShareCard(btn.getAttribute("data-share")); });
   });
+  el.querySelectorAll("[data-feed-edit]").forEach(function (btn) {
+    btn.addEventListener("click", function () { openEditWorkout(btn.getAttribute("data-feed-edit")); });
+  });
   el.querySelectorAll("[data-feed-open]").forEach(function (btn) {
     btn.addEventListener("click", function () { openWorkoutDetail(btn.getAttribute("data-feed-open")); });
   });
@@ -697,7 +706,7 @@ export function renderFriends() {
   }
 
   var rows = [];
-  friends.forEach(function (u) {
+  [state.me].concat(friends).forEach(function (u) {   // yours too, like Strava
     workoutsOf(u.id).forEach(function (wk) { rows.push({ user: u, wk: wk }); });
   });
   rows.sort(function (a, b) { return new Date(b.wk.performedAt) - new Date(a.wk.performedAt); });
@@ -705,7 +714,7 @@ export function renderFriends() {
   var html = friendStripHtml(friends) + boardStripHtml(friends) + milestonesHtml(friends);
 
   if (!rows.length) {
-    html += '<div class="empty-state">None of your friends have logged anything yet.</div>';
+    html += '<div class="empty-state">Nothing logged yet. Your workouts and your friends&rsquo; show up here.</div>';
   } else {
     // how many sessions each person logged per day, to tag a second one as #2
     var perDay = {};
