@@ -294,6 +294,26 @@
 </div>
 
 <!-- SIGN IN -->
+<!-- FIRST-TIME WALKTHROUGH (tour.js) -->
+<div class="tour" id="tour" hidden role="dialog" aria-label="Welcome to GymSocial"></div>
+
+<!-- IS THIS RIGHT? a workout under ten minutes long -->
+<div class="modal-overlay is-dialog" id="time-overlay" style="z-index:41;">
+  <div class="confirm-box time-box">
+    <h2 id="time-title">Only 3 minutes?</h2>
+    <p id="time-body">Check when you started and finished.</p>
+    <div class="time-check-row">
+      <label><span class="field-label">Started</span><input type="time" id="time-start"></label>
+      <label><span class="field-label">Finished</span><input type="time" id="time-end"></label>
+    </div>
+    <button type="button" class="btn btn-ghost btn-block time-fill" id="time-fill" hidden></button>
+    <div class="confirm-actions">
+      <button class="btn btn-ghost" id="time-ok">It's right</button>
+      <button class="btn btn-primary" id="time-save">Save times</button>
+    </div>
+  </div>
+</div>
+
 <div class="auth-page" id="auth-page" hidden>
   <button class="auth-close" id="auth-close" aria-label="Close">
     <svg viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>

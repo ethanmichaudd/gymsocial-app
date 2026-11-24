@@ -122,13 +122,25 @@ for (const theme of ["light", "dark"]) test(`Gestures and Finish (${theme})`, as
   const blocks = page.locator("#exercise-blocks .exercise-block");
   for (let i = 0; i < 3; i++) { await blocks.nth(i).locator(".set-v1").first().fill("5"); await blocks.nth(i).locator(".set-v2").first().fill("200"); }
   await page.click("#finish-workout-btn"); await page.waitForTimeout(350);
+  // started a moment ago: under ten minutes, so it asks
+  check(T + "a short workout asks about its times first", (await isOpen(page, "time-overlay")) && /Under a minute\?|Only \d+ minutes?\?/.test(await page.innerText("#time-title")) && !(await isOpen(page, "finish-overlay")), await page.innerText("#time-title"));
+  await shot(page, `gest-${theme}-3a-times`);
+  await page.evaluate(() => {
+    const e = document.getElementById("time-end").value.split(":").map(Number);
+    const m = (e[0] * 60 + e[1] - 50 + 1440) % 1440;
+    document.getElementById("time-start").value = String(Math.floor(m / 60)).padStart(2, "0") + ":" + String(m % 60).padStart(2, "0");
+  });
+  await page.click("#time-save"); await page.waitForTimeout(350);
   const sum = flat(await page.innerText("#finish-summary"));
+  check(T + "Save times: on to Finish with the new length", (await isOpen(page, "finish-overlay")) && /· 50m Edit/.test(sum), sum);
+  check(T + "and the log screen's Start box changed too", (await page.inputValue("#log-start")) === (await page.inputValue("#time-start")));
   check(T + "Finish sheet: title, times, what's in it", /^Pull Day .* · \d{1,2}:\d\d [AP]M .*3 exercises · 4 sets$/.test(sum), sum);
   check(T + "photo and calories are in the sheet", (await page.locator("#finish-overlay #log-photo").count()) === 1 && (await page.locator("#finish-overlay #log-calories").count()) === 1);
   await shot(page, `gest-${theme}-3-finish`);
   await page.click("#finish-close"); await page.waitForTimeout(250);
   check(T + "Not yet goes back, nothing saved", !(await isOpen(page, "finish-overlay")) && (await names(page)).length === 3);
   await page.click("#finish-workout-btn"); await page.waitForTimeout(300);
+  check(T + "asked once: the second Finish goes straight to the sheet", (await isOpen(page, "finish-overlay")) && !(await isOpen(page, "time-overlay")));
   await page.fill("#log-calories", "410");
   await page.click("#save-workout-btn"); await page.waitForTimeout(1500);
   const up = db.log.filter((l) => l.method === "POST" && l.path.endsWith("/workouts")).pop();
@@ -162,9 +174,80 @@ test("Gestures signed out", async ({ browser: b }) => {
   await addExercise(page, "Back Squat");
   await page.locator("#exercise-blocks .set-v1").first().fill("5");
   await page.click("#finish-workout-btn"); await page.waitForTimeout(300);
+  await page.click("#time-ok"); await page.waitForTimeout(300);
+  check("signed out: It's right goes on to Finish", !(await isOpen(page, "time-overlay")));
   check("signed out: Finish sheet opens, photo asks to sign in", (await isOpen(page, "finish-overlay")) && /Sign in/i.test(await page.innerText("#log-photo")));
   await swipe(page, "#finish-overlay .modal-head", 0, 320);
   check("signed out: Finish sheet pulls down to close", !(await isOpen(page, "finish-overlay")));
   check("signed out: no console errors", errors.length === 0, errors.join(" || "));
+  await context.close();
+});
+
+test("Inbox: swipe an item left to delete it", async ({ browser: b }) => {
+  browser = b;
+  const { context, page, db, errors } = await open();
+  await page.click("#open-inbox"); await page.waitForTimeout(800);
+  const before = await page.locator("#list-modal-body .inbox-swipe").count();
+  const first = flat(await page.locator("#list-modal-body .inbox-swipe").first().innerText());
+  await swipe(page, "#list-modal-body .inbox-swipe .swipe-front", -160, 3);
+  check("swipe shows Delete", (await page.locator("#list-modal-body .inbox-swipe.is-open [data-inbox-del]").count()) === 1);
+  await shot(page, "gest-inbox-swipe");
+  await page.click("#list-modal-body .inbox-swipe.is-open [data-inbox-del]"); await page.waitForTimeout(600);
+  const after = await page.locator("#list-modal-body .inbox-swipe").count();
+  const nowFirst = flat(await page.locator("#list-modal-body .inbox-swipe").first().innerText().catch(() => ""));
+  check("that one item is gone, the rest stay", after === before - 1 && nowFirst !== first, before + " -> " + after);
+  check("the sheet stays open", await isOpen(page, "list-modal-overlay"));
+  await page.waitForTimeout(1800);
+  const pushed = db.log.filter((l) => l.method === "PATCH" && l.path.endsWith("/profiles")).pop();
+  check("remembered in settings, so other phones hide it too", !!(pushed && pushed.body.settings && (pushed.body.settings.inboxHidden || []).length === 1));
+  // tapping a row (no swipe) still opens it
+  await page.locator("#list-modal-body .inbox-row[data-inbox-wk]").first().click(); await page.waitForTimeout(400);
+  check("a plain tap still opens the workout", (await page.innerText("#list-modal-title")) === "Workout");
+  await page.click("#list-modal-close");
+  // reopen the app: still gone
+  await page.reload(); await page.waitForTimeout(2600);
+  await page.click("#open-inbox"); await page.waitForTimeout(800);
+  check("still gone after reopening", (await page.locator("#list-modal-body .inbox-swipe").count()) === before - 1);
+  check("no console errors", errors.length === 0, errors.join(" || "));
+  await context.close();
+});
+
+test("Times check: a run logged afterwards", async ({ browser: b }) => {
+  browser = b;
+  const { context, page, errors } = await open();
+  await page.click('[data-tab="log"]'); await page.waitForTimeout(300);
+  await page.click('#log-kind [data-kind="cardio"]'); await page.waitForTimeout(300);
+  await page.fill(".is-cardio .c-m", "25"); await page.fill(".is-cardio .c-s", "30"); await page.fill(".is-cardio .c-dist", "3.1");
+  await page.click("#finish-workout-btn"); await page.waitForTimeout(300);
+  const fill = await page.innerText("#time-fill");
+  check("offers to use the run's own time", /Use 25:30 from your run/.test(fill), fill);
+  const end = await page.inputValue("#time-end");
+  await page.click("#time-fill"); await page.waitForTimeout(150);
+  const start = await page.inputValue("#time-start");
+  const mins = (t) => { const [h, m] = t.split(":").map(Number); return h * 60 + m; };
+  const diff = (mins(end) - mins(start) + 1440) % 1440;
+  check("start = finish − 25:30 (to the minute)", diff === 25 || diff === 26, start + " → " + end);
+  await page.click("#time-save"); await page.waitForTimeout(300);
+  check("on to Finish, now 25 minutes long", /· 2[56]m Edit/.test(flat(await page.innerText("#finish-summary"))), flat(await page.innerText("#finish-summary")));
+  check("no console errors", errors.length === 0, errors.join(" || "));
+  await context.close();
+});
+
+test("A new sheet opens at the top", async ({ browser: b }) => {
+  browser = b;
+  const { context, page, errors } = await open();
+  await page.click('[data-tab="friends"]'); await page.waitForTimeout(500);
+  await page.locator(".feed-card .feed-body").first().click(); await page.waitForTimeout(400);
+  await page.evaluate(() => { document.querySelector("#list-modal-overlay .modal-sheet").scrollTop = 400; });
+  const was = await page.evaluate(() => document.querySelector("#list-modal-overlay .modal-sheet").scrollTop);
+  await page.click("#list-modal-body .detail-who"); await page.waitForTimeout(400);
+  check("opening their profile from a scrolled workout starts at the top", was > 0 && (await page.evaluate(() => document.querySelector("#list-modal-overlay .modal-sheet").scrollTop)) === 0, String(was));
+  await page.click("#list-modal-close"); await page.waitForTimeout(200);
+  await page.click("#feed-board"); await page.waitForTimeout(300);
+  await page.evaluate(() => { document.querySelector("#list-modal-overlay .modal-sheet").scrollTop = 120; });
+  const before = await page.evaluate(() => document.querySelector("#list-modal-overlay .modal-sheet").scrollTop);
+  await page.click('[data-board="time"]'); await page.waitForTimeout(300);
+  check("switching a leaderboard tab keeps your place", (await page.evaluate(() => document.querySelector("#list-modal-overlay .modal-sheet").scrollTop)) === before);
+  check("no console errors", errors.length === 0, errors.join(" || "));
   await context.close();
 });

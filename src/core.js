@@ -1006,9 +1006,15 @@ function closeConfirm() {
 /* ----------------------------- reusable list sheet ----------------------------- */
 
 export function openListSheet(title, bodyHtml) {
-  document.getElementById("list-modal-title").textContent = title;
+  var overlay = document.getElementById("list-modal-overlay");
+  var titleEl = document.getElementById("list-modal-title");
+  // Something new starts at the top. Redrawing the same thing (a reaction
+  // in an open workout, another leaderboard tab) keeps your place.
+  var same = overlay.classList.contains("open") && titleEl.textContent === title;
+  titleEl.textContent = title;
   document.getElementById("list-modal-body").innerHTML = bodyHtml;
-  document.getElementById("list-modal-overlay").classList.add("open");
+  if (!same) overlay.querySelector(".modal-sheet").scrollTop = 0;
+  overlay.classList.add("open");
   return document.getElementById("list-modal-body");
 }
 

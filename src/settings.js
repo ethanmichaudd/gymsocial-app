@@ -12,6 +12,7 @@ import {
   showToast, state, STORAGE_KEY, titleCase
 } from "./core.js";
 import { renderHome, setCalendarMonth } from "./home.js";
+import { openTour } from "./tour.js";
 import { liveBlockHtml, wireLive } from "./live.js";
 import { draft, editDraft, renderEditModal, renderLog, resetDraft } from "./log.js";
 import { openRename, openUsername, renderProfile } from "./profile.js";
@@ -171,6 +172,12 @@ export function renderSettings() {
             '<span class="person-sub">Back up, restore or erase</span></span>' +
           '<span class="chevron">&rsaquo;</span>' +
         '</button>' +
+        '<button class="settings-row" id="open-tour" style="margin-top:8px;">' +
+          '<span class="settings-row-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M9.6 9.3a2.5 2.5 0 1 1 3.4 2.3c-.6.3-1 .8-1 1.5v.4"/><circle cx="12" cy="16.6" r=".6" fill="currentColor"/></svg></span>' +
+          '<span class="person-body"><span class="person-name">Take the tour</span>' +
+            '<span class="person-sub">What GymSocial can do, in four cards</span></span>' +
+          '<span class="chevron">&rsaquo;</span>' +
+        '</button>' +
       '</div>' +
     '</div>';
 
@@ -178,6 +185,7 @@ export function renderSettings() {
   wireNotify(el);
   wireLive(el);
   el.querySelector("#open-data").addEventListener("click", openDataSheet);
+  el.querySelector("#open-tour").addEventListener("click", openTour);
 
   var equipInput = el.querySelector("#set-equip");
   el.querySelector("[data-add-equip]").addEventListener("click", function () {

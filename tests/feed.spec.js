@@ -161,7 +161,7 @@ test("Feed: streaks, invite, saving a record", async ({ browser: b }) => {
   await page.locator("#exercise-modal-list .picker-row:not(.is-create)").first().click(); await page.waitForTimeout(300);
   await page.locator("#exercise-blocks .set-v1").first().fill("5");
   await page.locator("#exercise-blocks .set-v2").first().fill("275");
-  await page.click("#finish-workout-btn"); await page.waitForTimeout(250); await page.click("#save-workout-btn"); await page.waitForTimeout(2500);
+  await page.click("#finish-workout-btn"); await page.waitForTimeout(250); if (await page.locator("#time-overlay.open").count()) { await page.click("#time-ok"); await page.waitForTimeout(250); } await page.click("#save-workout-btn"); await page.waitForTimeout(2500);
   const up = db.log.filter((l) => l.method === "POST" && l.path.endsWith("/workouts")).pop();
   check("saved workout carries its PR for friends", !!(up && up.body && JSON.stringify(up.body).includes('"highlights"') && JSON.stringify(up.body).includes("Back Squat")), up && JSON.stringify(up.body).slice(0, 300));
   check("no console errors", errors.length === 0, errors.join(" || "));
@@ -180,7 +180,7 @@ test("Feed: database without 012, and no friends", async ({ browser: b }) => {
   await page.locator("#exercise-modal-list .picker-row:not(.is-create)").first().click(); await page.waitForTimeout(300);
   await page.locator("#exercise-blocks .set-v1").first().fill("5");
   await page.locator("#exercise-blocks .set-v2").first().fill("275");
-  await page.click("#finish-workout-btn"); await page.waitForTimeout(250); await page.click("#save-workout-btn"); await page.waitForTimeout(2500);
+  await page.click("#finish-workout-btn"); await page.waitForTimeout(250); if (await page.locator("#time-overlay.open").count()) { await page.click("#time-ok"); await page.waitForTimeout(250); } await page.click("#save-workout-btn"); await page.waitForTimeout(2500);
   const posts = db.log.filter((l) => l.method === "POST" && l.path.endsWith("/workouts"));
   check("pre-012: tried with the PR, then saved without it", posts.length >= 2 && JSON.stringify(posts[0].body).includes("highlights") && !JSON.stringify(posts[posts.length - 1].body).includes("highlights"), String(posts.length));
   check("pre-012: no console errors", errors.length === 0, errors.join(" || "));

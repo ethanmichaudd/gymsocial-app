@@ -113,7 +113,7 @@ for (const theme of ["light", "dark"]) test(`Signed in (${theme})`, async ({ bro
   if (await page.locator("#exercise-modal-overlay.open").count()) { await page.locator("#exercise-modal-list *").filter({ hasText: /Barbell|Back Squat/ }).first().click().catch(() => {}); await page.waitForTimeout(300); }
   const reps = page.locator("#exercise-blocks input").first();
   await reps.fill("5"); await page.locator("#exercise-blocks input").nth(1).fill("225").catch(() => {});
-  await page.click("#finish-workout-btn"); await page.waitForTimeout(250); await page.click("#save-workout-btn"); await page.waitForTimeout(900);
+  await page.click("#finish-workout-btn"); await page.waitForTimeout(250); if (await page.locator("#time-overlay.open").count()) { await page.click("#time-ok"); await page.waitForTimeout(250); } await page.click("#save-workout-btn"); await page.waitForTimeout(900);
   const saved = (await page.locator("#screen-home.active").count()) === 1;
   check(T + "saving the workout ends it", saved && presenceOps(db).pop() === "DELETE" && !db.presence.some((p) => p.user_id === ME), "saved=" + saved + " " + presenceOps(db).join(",") + " toast=" + await toast(page));
   if (await page.locator("#confirm-overlay.open").count()) await page.click("#confirm-no");

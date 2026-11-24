@@ -1298,6 +1298,13 @@ function openFinish() {
     showToast(draft.kind === "cardio" ? "Add a time or distance first." : "Fill in at least one set.");
     return;
   }
+  // Under ten minutes from start to finish usually means it was logged
+  // afterwards and the times are wrong: ask once, with the times to fix.
+  if (!draft.timesChecked) {
+    var s0 = isoFromDateTime(draft.date, draft.startTime), e0 = defaultEndIso(draft);
+    var len = e0 ? (new Date(e0) - new Date(s0)) / 1000 : 0;
+    if (len < 600) { openTimeCheck(clean, s0, e0, len); return; }
+  }
   var title = document.getElementById("log-title").value.trim() ||
     (draft.kind === "cardio" ? ((findExercise(clean[0].exerciseId) || {}).name || "Cardio") : "Workout");
   var start = isoFromDateTime(draft.date, draft.startTime);
@@ -1318,6 +1325,54 @@ function openFinish() {
     if (f) f.scrollIntoView({ block: "center" });
   };
   document.getElementById("finish-overlay").classList.add("open");
+}
+
+/* "Only 3 minutes?" Shows when you started and finished, both editable.
+   A run or a ride already knows how long it took, so it can offer to work
+   the start out from that. */
+function openTimeCheck(clean, startIso, endIso, len) {
+  var mins = Math.max(0, Math.round(len / 60));
+  document.getElementById("time-title").textContent = endIso
+    ? (mins < 1 ? "Under a minute?" : "Only " + mins + (mins === 1 ? " minute?" : " minutes?"))
+    : "When did you finish?";
+  document.getElementById("time-body").textContent =
+    "If you're logging this afterwards, set when you started and finished.";
+  var startIn = document.getElementById("time-start"), endIn = document.getElementById("time-end");
+  startIn.value = draft.startTime;
+  endIn.value = endIso ? timeInputValue(endIso) : timeInputValue(new Date().toISOString());
+
+  // the time on the cardio itself, if there is one
+  var cardioSecs = 0;
+  clean.forEach(function (b) {
+    if (b.metric === "cardio") b.sets.forEach(function (st) { cardioSecs += st.seconds || 0; });
+  });
+  var fill = document.getElementById("time-fill");
+  fill.hidden = !(cardioSecs >= 60);
+  if (!fill.hidden) {
+    fill.textContent = "Use " + formatDuration(cardioSecs) + " from your " + (draft.kind === "cardio"
+      ? ((findExercise(clean[0].exerciseId) || {}).name || "cardio").toLowerCase() : "cardio");
+    fill.onclick = function () {
+      // finished when it says; started that long before
+      var end = endIsoFrom(draft.date, startIn.value || draft.startTime, endIn.value);
+      startIn.value = timeInputValue(new Date(new Date(end).getTime() - cardioSecs * 1000).toISOString());
+    };
+  }
+  var done = function () {
+    draft.timesChecked = true;
+    document.getElementById("time-overlay").classList.remove("open");
+    openFinish();
+  };
+  document.getElementById("time-ok").onclick = done;
+  document.getElementById("time-save").onclick = function () {
+    if (startIn.value) draft.startTime = startIn.value;
+    draft.endTime = endIn.value || "";
+    document.getElementById("log-start").value = draft.startTime;
+    document.getElementById("log-end").value = draft.endTime;
+    updateDurationReadout("log", draft);
+    saveDraft();
+    done();
+  };
+  document.getElementById("time-overlay").classList.add("open");
 }
 
 function closeFinish() {

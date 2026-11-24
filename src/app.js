@@ -18,6 +18,7 @@ import {
 import { migrateCardio, startCardio } from "./cardio.js";
 import { openWorkoutDetail, processPendingAdd, setAuthResolved, startFeed } from "./feed.js";
 import { startGestures } from "./gestures.js";
+import { startTour } from "./tour.js";
 import { startGyms } from "./gyms.js";
 import { renderHome, startHome } from "./home.js";
 import { openInbox, renderBell, startInbox } from "./inbox.js";
@@ -79,6 +80,7 @@ persist();
 renderHome();
 
 startNews();          // a one-time message (the new app icon); see news.js
+startTour();          // the first-time walkthrough, once per phone; see tour.js
 
 /* Accounts + sync. After a pull brings in changes from another phone,
    redraw whatever is on screen -- except mid-edit, where it would wipe

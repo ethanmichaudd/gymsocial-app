@@ -89,6 +89,8 @@ export async function install(context, db) {
   // the one-time "new app icon" message would sit on top of every test;
   // only tests/news.spec.js asks for it (db.showNews)
   if (!db.showNews) await context.addInitScript(() => { try { localStorage.setItem("gymsocial_news_logo_v1", "1"); } catch (e) { /* no storage yet */ } });
+  // the first-time walkthrough too: only tests/tour.spec.js asks for it (db.showTour)
+  if (!db.showTour) await context.addInitScript(() => { try { localStorage.setItem("gymsocial_tour_v1", "1"); } catch (e) { /* no storage yet */ } });
   await context.route("https://kmhndltnnlhovykfffjg.supabase.co/**", async (route) => {
     const req = route.request();
     const url = new URL(req.url());

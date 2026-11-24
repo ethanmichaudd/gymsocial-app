@@ -11,6 +11,7 @@ import {
 import { actBtn, knownPeople, oneEmoji, openWorkoutDetail, renderFriends } from "./feed.js";
 import { renderHome } from "./home.js";
 import { addTaggedToLog, settleTag } from "./log.js";
+import { wireSwipeRows } from "./gestures.js";
 
 /* ----------------------------- inbox ----------------------------- */
 
@@ -27,12 +28,20 @@ function inboxSeen() {
   return state.settings.inboxSeenAt || new Date(Date.now() - 3 * 864e5).toISOString();
 }
 
+/* One activity item, the same on every phone: who, what, which workout, when. */
+function itemKey(it) {
+  return [it.kind, it.userId || "", it.workoutId || "", it.at || ""].join("|");
+}
+
 function inboxActivity() {
   if (!currentUser()) return [];
-  // "Clear all" hides everything up to that moment, on every phone
+  // "Clear all" hides everything up to that moment, on every phone;
+  // a swipe-deleted item is hidden by itself
   var cleared = state.settings.inboxClearedAt || "";
+  var hidden = state.settings.inboxHidden || [];
   return (state.inbox || []).filter(function (it) {
     if (cleared && (!it.at || it.at <= cleared)) return false;
+    if (hidden.indexOf(itemKey(it)) !== -1) return false;
     // reactions, comments and tags point at a workout: skip any whose
     // workout has since been deleted
     if (!it.workoutId) return true;
@@ -131,11 +140,17 @@ function inboxHtml(seen) {
       text = it.kind === "accepted" ? name + ' accepted your request' : 'You and ' + name + ' are friends';
       target = ' data-profile="' + esc(u.id) + '"';
     }
-    return '<button class="inbox-row' + (it.at && it.at > seen ? " is-new" : "") + (extra ? " has-acts" : "") + '"' + target + '>' +
-      '<span class="profile-tap" data-profile="' + esc(u.id) + '">' + avatarHtml(u) + '</span>' +
-      '<span class="inbox-text">' + text + '</span>' +
-      '<span class="inbox-when">' + esc(agoShort(it.at)) + '</span>' +
-    '</button>' + extra;
+    // swipe left (or press and hold) for Delete
+    return '<div class="swipe-row inbox-swipe">' +
+      '<div class="swipe-actions"><button class="swipe-act is-delete" data-inbox-del="' + esc(itemKey(it)) + '">Delete</button></div>' +
+      '<div class="swipe-front">' +
+        '<button class="inbox-row' + (it.at && it.at > seen ? " is-new" : "") + (extra ? " has-acts" : "") + '"' + target + '>' +
+          '<span class="profile-tap" data-profile="' + esc(u.id) + '">' + avatarHtml(u) + '</span>' +
+          '<span class="inbox-text">' + text + '</span>' +
+          '<span class="inbox-when">' + esc(agoShort(it.at)) + '</span>' +
+        '</button>' + extra +
+      '</div>' +
+    '</div>';
   }).join("") : '<div class="empty-state">' + (requests.length
     ? "Nothing else yet."
     : "Nothing yet. Friend requests, reactions, comments and tags show up here.") + '</div>';
@@ -157,6 +172,19 @@ function markInboxSeen() {
   renderBell();
 }
 
+/* Deletes one item, on every phone. A tag nobody answered is answered by
+   deleting it, the same as Clear all. Only the newest few hundred are
+   remembered: anything older has long since dropped off the list anyway. */
+function deleteInboxItem(key) {
+  var it = (state.inbox || []).filter(function (x) { return itemKey(x) === key; })[0];
+  if (it && it.kind === "tag" && !(state.settings.tagsDone || {})[it.workoutId]) settleTag(it.workoutId);
+  var hidden = (state.settings.inboxHidden || []).filter(function (k) { return k !== key; });
+  hidden.push(key);
+  state.settings.inboxHidden = hidden.slice(-300);
+  persist();
+  renderBell();
+}
+
 /* Empties the activity list. Friend requests stay: they need an answer. */
 function clearInbox() {
   var latest = new Date().toISOString();
@@ -172,6 +200,23 @@ function clearInbox() {
 
 function drawInbox(el, seen) {
   el.innerHTML = inboxHtml(seen);
+  wireSwipeRows(el);
+  el.querySelectorAll("[data-inbox-del]").forEach(function (b) {
+    b.addEventListener("click", function (e) {
+      e.stopPropagation();
+      var row = b.closest(".swipe-row");
+      var key = b.getAttribute("data-inbox-del");
+      // fold the row away, then redraw without it
+      row.style.height = row.offsetHeight + "px";
+      row.offsetHeight;                                   // eslint-disable-line no-unused-expressions
+      row.classList.add("is-leaving");
+      row.style.height = "0px";
+      setTimeout(function () {
+        deleteInboxItem(key);
+        if (inboxIsOpen()) drawInbox(el, seen);
+      }, 220);
+    });
+  });
   var clear = el.querySelector("[data-inbox-clear]");
   if (clear) clear.addEventListener("click", function () {
     clearInbox();
