@@ -52,10 +52,12 @@ for (const theme of ["light", "dark"]) test(`Signed in (${theme})`, async ({ bro
   check(T + "list: 3 gyms people train at, not the empty one", rows.length === 3 && !rows.some((r) => /Empty Gym/.test(r)), rows.join(" || "));
   check(T + "list: friends first, with avatars count and today", /^Planet Fitness - Boston, MA.*1 friend, 1 today.*2 people this month/.test(rows[0] || ""), rows[0]);
   check(T + "list: counts only for strangers' gym", rows.some((r) => /Crunch Fitness - Cambridge, MA.*3 people this month/.test(r)), rows.join(" || "));
-  check(T + "map drawn, credits OpenStreetMap and CARTO", (await page.locator("#places-map.leaflet-container").count()) === 1 && /OpenStreetMap.*CARTO/.test(await page.innerText("#places-map .leaflet-control-attribution")));
-  const style = theme === "dark" ? "/dark_all/" : "/rastertiles/voyager/";
-  check(T + "the clean " + (theme === "dark" ? "dark" : "light") + " map (the stock OpenStreetMap address in app_config doesn't override it), sharp, Referer sent",
-    db.tiles.length > 0 && db.tiles.every((t) => /^https:\/\/[a-d]\.basemaps\.cartocdn\.com\//.test(t.url) && t.url.includes(style) && /@2x\.png$/.test(t.url) && t.referer.startsWith(URL_.slice(0, -1))), db.tiles[0] && JSON.stringify(db.tiles[0]));
+  check(T + "map drawn with attribution", (await page.locator("#places-map.leaflet-container").count()) === 1 && /OpenStreetMap/.test(await page.innerText("#places-map .leaflet-control-attribution")));
+  check(T + "tiles come from the configured server (no API key needed), Referer sent", db.tiles.length > 0 && db.tiles.every((t) => t.url.startsWith("https://tile.openstreetmap.org/") && t.referer.startsWith(URL_.slice(0, -1))), db.tiles[0] && JSON.stringify(db.tiles[0]));
+  check(T + "one style for both themes: " + (theme === "dark" ? "inverted" : "softened"), await page.evaluate((dark) => {
+    const f = getComputedStyle(document.querySelector("#places-map .leaflet-tile-pane")).filter;
+    return dark ? /invert/.test(f) : /saturate/.test(f) && !/invert/.test(f);
+  }, theme === "dark"));
   check(T + "3 pins (one was looked up)", (await page.locator("#places-map .gym-pin:not(.is-osm)").count()) === 3, await page.locator("#places-map .gym-pin:not(.is-osm)").count());
   check(T + "address lookup: one request, for the gym with no pin", db.geo.length === 1 && db.geo[0].q === "915 commonwealth ave, boston, ma" && db.geo[0].format === "jsonv2" && db.geo[0].limit === "1" && db.geo[0].referer.startsWith(URL_.slice(0, -1)), JSON.stringify(db.geo));
   const pinPush = db.log.filter((l) => l.path.endsWith("/rpc/set_gym_location"));

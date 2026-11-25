@@ -16,17 +16,15 @@
  *       (the app_config table in supabase/008_gym_places.sql)
  *     - private gyms are never looked up: a home address is personal data
  *
- *   Map tiles — CARTO's basemaps (Voyager in the light theme, Dark Matter in
- *   the dark one), drawn from OpenStreetMap data.
- *   https://github.com/CartoDB/basemap-styles#license
- *     - "© OpenStreetMap contributors © CARTO" stays visible on every map
- *     - free for non-commercial use at this size; a commercial launch needs a
- *       CARTO plan or another tile server. Either is one change: set
- *       tile_url in the app_config "maps" row and every map uses it (the
- *       stock OpenStreetMap address that 008/010 wrote there counts as
- *       "no choice made", so it doesn't override the themed maps)
+ *   Map tiles — OpenStreetMap's own, https://operations.osmfoundation.org/policies/tiles/
+ *     - "© OpenStreetMap contributors" stays visible on every map
  *     - only what's on screen is fetched; the service worker does not store
- *       tiles
+ *       tiles (offline use of their tiles isn't allowed)
+ *     - they only come in one (light) style: the app softens them a little,
+ *       and inverts them in the dark theme (style.css)
+ *     - another tile server is one change: tile_url (and tile_url_dark, for a
+ *       real dark style) in the app_config "maps" row. (CARTO's free maps
+ *       were tried and now need an API key.)
  *
  *   Gyms nearby (Overpass, OpenStreetMap's query service) —
  *   https://dev.overpass-api.de/overpass-doc/en/preface/commons.html
@@ -48,9 +46,8 @@ const STOCK_OSM_TILES = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
 const DEFAULTS = {
   geocoding: true,
   geocoderUrl: "https://nominatim.openstreetmap.org/search",
-  // {s} is one of a-d, {r} is "@2x" on a sharp screen (Leaflet fills both in)
-  tileUrl: "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png",
-  tileUrlDark: "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
+  tileUrl: STOCK_OSM_TILES,
+  tileUrlDark: null,          // null: no dark style, so the light one is inverted
   customTiles: false,
   places: true,
   placesUrl: "https://overpass-api.de/api/interpreter",
@@ -60,18 +57,17 @@ let config = { ...DEFAULTS };
 
 export const MAP_ATTRIBUTION =
   '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors';
-const CARTO_ATTRIBUTION = ' &copy; <a href="https://carto.com/attributions" target="_blank" rel="noopener">CARTO</a>';
 
 /** Takes the "maps" row of app_config. Anything missing or odd keeps the default. */
 export function setMapConfig(c) {
   if (!c || typeof c !== "object") return;
   const https = (u) => typeof u === "string" && /^https:\/\/\S+$/.test(u);
-  const custom = https(c.tile_url) && c.tile_url !== STOCK_OSM_TILES;
+  const custom = https(c.tile_url);
   config = {
     geocoding: c.geocoding !== false,
     geocoderUrl: https(c.geocoder_url) ? c.geocoder_url : DEFAULTS.geocoderUrl,
     tileUrl: custom ? c.tile_url : DEFAULTS.tileUrl,
-    tileUrlDark: custom ? (https(c.tile_url_dark) ? c.tile_url_dark : c.tile_url) : DEFAULTS.tileUrlDark,
+    tileUrlDark: custom && https(c.tile_url_dark) ? c.tile_url_dark : null,
     customTiles: custom,
     places: c.places !== false,
     placesUrl: https(c.places_url) ? c.places_url : DEFAULTS.placesUrl,
@@ -84,12 +80,17 @@ export function mapConfig() {
 
 /** The tile address for the light or dark theme. */
 export function tileUrlFor(dark) {
-  return dark ? config.tileUrlDark : config.tileUrl;
+  return (dark && config.tileUrlDark) || config.tileUrl;
+}
+
+/** True when the dark theme has to make do with the light tiles, inverted. */
+export function darkByFilter() {
+  return !config.tileUrlDark;
 }
 
 /** Who to credit, under every map. */
 export function mapAttribution() {
-  return MAP_ATTRIBUTION + (config.customTiles ? "" : CARTO_ATTRIBUTION);
+  return MAP_ATTRIBUTION;
 }
 
 /* =========================================================================

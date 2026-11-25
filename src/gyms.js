@@ -8,7 +8,7 @@ import {
 } from "./store.js";
 import {
   canAskNearby, canLocate, closestGym, distanceKm, formatDistance, locateGym, lookUpNearby,
-  mapAttribution, mapConfig, nameLikeness, nearbyKnown, placeOf, setMapConfig, tileUrlFor
+  darkByFilter, mapAttribution, mapConfig, nameLikeness, nearbyKnown, placeOf, setMapConfig, tileUrlFor
 } from "./geo.js";
 import {
   activateTab, avatarHtml, calendarDate, closeListSheet, currentTab, esc, findExercise,
@@ -326,8 +326,10 @@ function isDark() { return document.documentElement.getAttribute("data-theme") =
 function addTiles(map) {
   var dark = isDark();
   map._gsTiles = Leaflet.tileLayer(tileUrlFor(dark), {
-    maxZoom: 19, subdomains: "abcd", detectRetina: false, attribution: mapAttribution()
+    maxZoom: 19, attribution: mapAttribution()
   }).addTo(map);
+  // one style only: the dark theme inverts it (style.css)
+  map.getContainer().classList.toggle("tiles-invert", darkByFilter());
   map._gsDark = dark;
   if (map.attributionControl) map.attributionControl.setPrefix(false);
   tiledMaps = tiledMaps.filter(function (m) { return m._container && document.body.contains(m._container); });

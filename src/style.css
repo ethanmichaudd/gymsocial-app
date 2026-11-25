@@ -1593,8 +1593,15 @@
   body .leaflet-bar a, body .leaflet-bar a:hover {
     background: var(--surface); color: var(--text); border-bottom-color: var(--border);
   }
-  /* a dark map in the dark theme (see geo.js) -- no filters needed */
   body .leaflet-container .leaflet-control-attribution { border-radius: 0 0 6px 0; }
+  /* OpenStreetMap's tiles come in one busy, bright style: softened a little
+     in the light theme, inverted and muted in the dark one */
+  body .leaflet-container.tiles-invert .leaflet-tile-pane { filter: saturate(0.7) contrast(0.94) brightness(1.03); }
+  :root[data-theme="dark"] body .leaflet-container.tiles-invert .leaflet-tile-pane {
+    filter: invert(1) hue-rotate(180deg) brightness(0.92) contrast(0.88) saturate(0.45);
+  }
+  /* the zoom buttons (mouse only) sit under the locate button, not behind it */
+  #places-map .leaflet-top.leaflet-right { top: 64px; }
   .you-dot { stroke: var(--surface); fill: var(--accent); fill-opacity: 1; }
 
   .gym-pin-wrap { background: none; border: none; }
@@ -2189,7 +2196,13 @@
   .tour[hidden] { display: none; }
   .tour.open { opacity: 1; }
   .tour-top { display: flex; justify-content: flex-end; padding: 4px 18px; min-height: 40px; }
-  .tour-skip { background: none; border: 0; font-family: inherit; font-size: 15px; font-weight: 600; color: var(--text-muted); cursor: pointer; padding: 8px; }
+  .tour-close {
+    width: 40px; height: 40px; padding: 0; border-radius: 50%; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--surface); border: 1px solid var(--border); box-shadow: 0 2px 8px -4px rgba(0,0,0,.3);
+  }
+  .tour-close svg { width: 18px; height: 18px; stroke: var(--text); fill: none; }
+  .tour-foot .tour-later { display: block; margin: 6px auto 0; }
   .tour-track {
     flex: 1; display: flex; overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: none;
     -webkit-overflow-scrolling: touch;

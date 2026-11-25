@@ -154,7 +154,9 @@ var current = 0;
 function tourHtml() {
   var signedIn = !!currentUser();
   var goal = state.settings.weeklyGoal || 3;
-  return '<div class="tour-top"><button type="button" class="tour-skip" id="tour-skip">Skip</button></div>' +
+  // a way out on every card: the ✕, or Skip tour under the dots
+  return '<div class="tour-top"><button type="button" class="tour-close" id="tour-skip" aria-label="Close the tour">' +
+      '<svg viewBox="0 0 24 24" stroke-width="2.4" stroke-linecap="round"><path d="M7 7l10 10M17 7L7 17"/></svg></button></div>' +
     '<div class="tour-track" id="tour-track">' + CARDS.map(function (c, i) {
       return '<section class="tour-card" data-tour-card="' + i + '" aria-label="' + (i + 1) + ' of ' + CARDS.length + '">' +
         c.art +
@@ -174,6 +176,7 @@ function tourHtml() {
     }).join("") + '</div>' +
     '<div class="tour-foot" id="tour-foot">' +
       '<button type="button" class="btn btn-primary btn-block tour-next" id="tour-next">Next</button>' +
+      '<button type="button" class="tour-later" id="tour-skip-text">Skip tour</button>' +
       '<div class="tour-end" id="tour-end" hidden>' +
         (signedIn
           ? '<button type="button" class="btn btn-primary btn-block" id="tour-start">Log your first workout</button>'
@@ -198,10 +201,13 @@ function sync() {
   document.querySelectorAll(".tour-dot-i").forEach(function (d, i) { d.classList.toggle("is-on", i === current); });
   document.getElementById("tour-next").hidden = last;
   document.getElementById("tour-end").hidden = !last;
-  document.getElementById("tour-skip").style.visibility = last ? "hidden" : "visible";
+  document.getElementById("tour-skip-text").hidden = last;
 }
 
+function onKey(e) { if (e.key === "Escape") finish(); }
+
 function finish(then) {
+  document.removeEventListener("keydown", onKey);
   markSeen();
   state.settings.tourDone = true;
   persist();
@@ -217,6 +223,7 @@ export function openTour() {
   el.hidden = false;
   current = 0;
   requestAnimationFrame(function () { el.classList.add("open"); });
+  document.addEventListener("keydown", onKey);
 
   var track = document.getElementById("tour-track");
   var t = null;
@@ -229,6 +236,7 @@ export function openTour() {
   });
   document.getElementById("tour-next").addEventListener("click", function () { show(current + 1); });
   document.getElementById("tour-skip").addEventListener("click", function () { finish(); });
+  document.getElementById("tour-skip-text").addEventListener("click", function () { finish(); });
   el.querySelectorAll("[data-tour-goal]").forEach(function (b) {
     b.addEventListener("click", function () {
       var n = Number(b.getAttribute("data-tour-goal"));

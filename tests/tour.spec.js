@@ -45,6 +45,7 @@ for (const theme of ["light", "dark"]) test(`First open: the tour (${theme})`, a
   }
   await page.screenshot({ path: `${SCREENS}/tour-${theme}-4.png` });
   check(theme + ": last card swaps Next for the way in", await page.locator("#tour-next").isHidden() && await page.locator("#tour-signup").isVisible() && await page.locator("#tour-start").isVisible());
+  check(theme + ": the ✕ is still there on the last card", await page.locator("#tour-skip").isVisible());
   await page.click('[data-tour-goal="4"]');
   check(theme + ": picking a goal shows it big", (await page.innerText("#tour-goal-num")) === "4");
   await page.click("#tour-signup"); await page.waitForTimeout(500);
@@ -57,8 +58,15 @@ for (const theme of ["light", "dark"]) test(`First open: the tour (${theme})`, a
   await page.click("#open-settings"); await page.waitForTimeout(300);
   await page.click("#open-tour"); await page.waitForTimeout(400);
   check(theme + ": Settings can show it again", await shown(page));
+  check(theme + ": a way out on the first card: ✕ and Skip tour", await page.locator("#tour-skip").isVisible() && await page.locator("#tour-skip-text").isVisible());
   await page.click("#tour-skip"); await page.waitForTimeout(400);
-  check(theme + ": Skip closes it", !(await shown(page)));
+  check(theme + ": ✕ closes it", !(await shown(page)));
+  await page.click("#open-tour"); await page.waitForTimeout(400);
+  await page.click("#tour-skip-text"); await page.waitForTimeout(400);
+  check(theme + ": so does Skip tour", !(await shown(page)));
+  await page.click("#open-tour"); await page.waitForTimeout(400);
+  await page.keyboard.press("Escape"); await page.waitForTimeout(400);
+  check(theme + ": and Escape, on a keyboard", !(await shown(page)));
   check(theme + ": no console errors", errors.length === 0, errors.join(" || "));
   await context.close();
 });
