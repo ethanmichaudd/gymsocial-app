@@ -52,7 +52,7 @@ for (const theme of ["light", "dark"]) test(`Signed in (${theme})`, async ({ bro
   await shot(page, `p3-${theme}-6-gym-regulars`);
   await page.click("#gym-modal-close");
   await page.click('[data-tab="gyms"]'); await page.waitForTimeout(1500);
-  const row = flat(await page.locator("#places-list .place-row", { hasText: "Planet Fitness" }).innerText());
+  const row = flat(await page.locator("#places-list .place-row:not(.is-osm)", { hasText: "Planet Fitness" }).innerText());
   check(T + "Gyms list: here-now count", /1 here now/.test(row), row);
 
   // ---------- off by default ----------
@@ -91,7 +91,7 @@ for (const theme of ["light", "dark"]) test(`Signed in (${theme})`, async ({ bro
 
   // ---------- check in from the gym page: explicit, so automatic ----------
   await page.click('[data-tab="gyms"]'); await page.waitForTimeout(600);
-  await page.locator("#places-list .place-row", { hasText: "Planet Fitness" }).click(); await page.waitForTimeout(600);
+  await page.locator("#places-list .place-row:not(.is-osm)", { hasText: "Planet Fitness" }).click(); await page.waitForTimeout(600);
   await page.click("#gym-checkin"); await page.waitForTimeout(700);
   check(T + "Check in here shares it, and the last word to the server is the check-in", presenceOps(db).pop() === "POST:G1" && db.presence.some((p) => p.user_id === ME && p.gym_id === G1), presenceOps(db).join(","));
   await page.click('[data-tab="home"]'); await page.waitForTimeout(400);
@@ -105,7 +105,7 @@ for (const theme of ["light", "dark"]) test(`Signed in (${theme})`, async ({ bro
 
   // ---------- saving ends it ----------
   await page.click('[data-tab="gyms"]'); await page.waitForTimeout(500);
-  await page.locator("#places-list .place-row", { hasText: "Planet Fitness" }).click(); await page.waitForTimeout(500);
+  await page.locator("#places-list .place-row:not(.is-osm)", { hasText: "Planet Fitness" }).click(); await page.waitForTimeout(500);
   await page.click("#gym-checkin"); await page.waitForTimeout(500);
   await page.click("#add-exercise-btn"); await page.waitForTimeout(300);
   await page.fill("#exercise-search", "back squat"); await page.waitForTimeout(300);
@@ -139,7 +139,7 @@ test("Ties share the crown", async ({ browser: b }) => {
   browser = b;
   const { context, page } = await open({ tweak: (db) => { for (let i = 2; i < 5; i++) db.workouts.push({ id: `dddddddd-0000-4000-8000-00000000001${i}`, user_id: DEV, gym_id: G1, title: "More", performed_at: new Date(Date.now() - 600000).toISOString(), ended_at: null, calories: null, photo_path: null, workout_exercises: [] }); } });
   await page.click('[data-tab="gyms"]'); await page.waitForTimeout(1200);
-  await page.locator("#places-list .place-row", { hasText: "Planet Fitness" }).click(); await page.waitForTimeout(700);
+  await page.locator("#places-list .place-row:not(.is-osm)", { hasText: "Planet Fitness" }).click(); await page.waitForTimeout(700);
   const body = flat(await page.innerText("#gym-modal-body"));
   check("tie: both on 5 share first place, next is third", (await page.locator("#gym-modal-body .crown").count()) === 2 && /You 5 sessions First place DP Dev Patel 5 sessions 3 MJ Maya Jensen 1 session/.test(body), body);
   await context.close();
@@ -154,7 +154,7 @@ test("Database that hasn't run 009", async ({ browser: b }) => {
   check("pre-009: switch explains and stays off", (await page.getAttribute("#live-switch", "aria-checked")) === "false" && /needs a database update/.test(await toast(page)), await toast(page));
   await page.click("#open-settings");
   await page.click('[data-tab="gyms"]'); await page.waitForTimeout(1200);
-  await page.locator("#places-list .place-row", { hasText: "Planet Fitness" }).click(); await page.waitForTimeout(700);
+  await page.locator("#places-list .place-row:not(.is-osm)", { hasText: "Planet Fitness" }).click(); await page.waitForTimeout(700);
   check("pre-009: regulars and badges still work (they need no database change)", /REGULARS/i.test(await page.innerText("#gym-modal-body")) && /5 visits/.test(await page.innerText("#gym-modal-body")));
   check("pre-009: no console errors", errors.length === 0, errors.join(" || "));
   await context.close();

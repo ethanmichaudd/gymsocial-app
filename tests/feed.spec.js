@@ -69,7 +69,7 @@ for (const theme of ["light", "dark"]) test(`Feed, signed in (${theme})`, async 
   await page.click("#feed-board"); await page.waitForTimeout(300);
   const sheet = flat(await page.innerText("#list-modal-body"));
   check(T + "leaderboard sheet ranks everyone, you included", (await page.locator(".board-row").count()) === 3 && /You/.test(sheet) && /Maya Jensen/.test(sheet) && /Dev Patel/.test(sheet), sheet);
-  check(T + "five boards to pick from", (await page.locator(".board-tab").allInnerTexts()).join(",") === "Workouts,Time,Volume,Streak,Cardio");
+  check(T + "five boards to pick from", (await page.locator(".board-tab").allInnerTexts()).join(",") === "Workouts,Time,Volume,Active weeks,Cardio");
   const rowsText = async () => (await page.locator(".board-row").allInnerTexts()).map(flat);
   await page.click('[data-board="time"]'); await page.waitForTimeout(300);
   let r = await rowsText();
@@ -159,10 +159,13 @@ test("Feed: streaks, invite, saving a record", async ({ browser: b }) => {
     }
   });
   await page.click('[data-tab="friends"]'); await page.waitForTimeout(700);
-  const ms = flat(await page.locator(".milestone").first().innerText().catch(() => ""));
-  check("streak milestone for Dev", /Dev is on a 4-week streak/.test(ms), ms);
-  await page.locator(".milestone-react").first().click(); await page.waitForTimeout(500);
-  check("reacting to the streak reacts to his latest workout", db.reactions.some((r) => r.user_id === ME && r.workout_id === "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb0" && r.emoji === "🔥"));
+  // Dev has no streak rule on file in the stand-in, so: weeks in a row with a workout
+  const devFace = page.locator('.strip-face[data-profile="' + DEV + '"]');
+  check("Dev's bubble carries a flame with his streak", (await devFace.locator(".strip-streak").innerText()).trim() === "4" && /4-week streak/.test(await devFace.getAttribute("aria-label")), await devFace.getAttribute("aria-label"));
+  check("no streak rows under the leaderboard any more", (await page.locator(".milestone").count()) === 0);
+  await devFace.click(); await page.waitForTimeout(300);
+  check("his profile shows the same streak", /4\s*week streak/i.test(flat(await page.innerText("#list-modal-body .up-stats"))), flat(await page.innerText("#list-modal-body .up-stats")));
+  await page.click("#list-modal-close"); await page.waitForTimeout(200);
   await shot(page, "feed-streak");
 
   // a new record of mine goes up with the workout
@@ -212,5 +215,35 @@ test("Feed: signed out", async ({ browser: b }) => {
   await page.click('[data-tab="friends"]'); await page.waitForTimeout(400);
   check("signed out: sign-in card, no add-friends icon", /Sign in to see your friends/.test(await page.innerText("#friends-feed")) && await page.locator("#friends-manage").isHidden());
   check("signed out: no console errors", errors.length === 0, errors.join(" || "));
+  await context.close();
+});
+
+test("Streaks: a friend sees the number your Home shows", async ({ browser: b }) => {
+  browser = b;
+  // Maya counts by day. She trained today and the 4 days before: a 5-day streak,
+  // though only one week in a row (all this week) -- the old feed said weeks.
+  const { context, page, errors } = await open({
+    tweak: (d) => {
+      Object.assign(d.profiles.find((p) => p.id === MAYA), { streak_mode: "daily", weekly_goal: 3, custom_count: 4, custom_days: 10 });
+      const base = d.workouts.find((w) => w.id === W2);
+      for (let i = 1; i < 5; i++) {
+        const when = new Date(); when.setHours(9, 0, 0, 0); when.setDate(when.getDate() - i);
+        const copy = JSON.parse(JSON.stringify(base));
+        copy.id = "cccccccc-cccc-4ccc-8ccc-ccccccccccc" + i; copy.title = "Maya " + i;
+        copy.performed_at = when.toISOString(); copy.ended_at = null;
+        d.workouts.push(copy);
+      }
+    }
+  });
+  await page.click('[data-tab="friends"]'); await page.waitForTimeout(700);
+  const maya = page.locator('.strip-face[data-profile="' + MAYA + '"]');
+  check("Maya's bubble: 5, counted her way (days)", (await maya.locator(".strip-streak").innerText()).trim() === "5" && /5-day streak/.test(await maya.getAttribute("aria-label")), await maya.getAttribute("aria-label"));
+  await shot(page, "feed-streak-flames");
+  const me = page.locator('.strip-face.is-me');
+  check("your bubble: no flame for a 1-week streak", (await me.locator(".strip-streak").count()) === 0);
+  await page.click("#feed-board"); await page.waitForTimeout(300);
+  await page.click('[data-board="streak"]'); await page.waitForTimeout(300);
+  check("the leaderboard's yardstick is called Active weeks, not Streak", (await page.innerText(".board-tab.is-on")) === "Active weeks");
+  check("no console errors", errors.length === 0, errors.join(" || "));
   await context.close();
 });

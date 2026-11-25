@@ -11,7 +11,7 @@ import {
 import {
   activateTab, avatarHtml, buzz, defaultUnit, calendarDate, closeListSheet, durationOf, esc, featureOn,
   findExercise, findGym, findPerson, findUser, formatDuration, formatDurationLong, formatTime,
-  FRIENDS_SVG, friendsOf, gymAddress, gymLabel, localDayKey, loggedSetTime, metricOf,
+  computeStreak, FLAME_SVG, FRIENDS_SVG, friendsOf, streakUnit, gymAddress, gymLabel, localDayKey, loggedSetTime, metricOf,
   openConfirm, openListSheet, persist, prsAt, repSetCount, sessionDistance, sessionFacts,
   sessionVolume, shortDate, showToast, signedOut, state, summarizeSets, weekStartOf, workoutById,
   workoutsOf, workoutTitleHtml
@@ -286,12 +286,14 @@ export function prsFor(wk) {
 /* ---- leaderboards ----
    Five ways to rank you and your friends, over this week or this month.
    The feed shows one line for whichever you looked at last; the sheet
-   has them all. Streak ignores the range: it's weeks in a row, now. */
+   has them all. Active weeks ignores the range: it's weeks in a row with a
+   workout, the same yardstick for everyone (a streak is counted by each
+   person's own goal, so it lives on their bubble instead). */
 var BOARDS = [
   { id: "workouts", label: "Workouts" },
   { id: "time",     label: "Time" },
   { id: "volume",   label: "Volume" },
-  { id: "streak",   label: "Streak" },
+  { id: "streak",   label: "Active weeks" },
   { id: "cardio",   label: "Cardio" }
 ];
 var LB_PER_KG = 2.20462, MI_PER_KM = 0.621371;
@@ -367,9 +369,14 @@ function friendStripHtml(friends) {
   return '<div class="friend-strip">' + people.map(function (u) {
     var cls = live[u.id] ? " is-live" : today(u) ? " is-today" : "";
     if (u.id === state.me.id) cls += " is-me";
+    var s = computeStreak(u.id);
+    var streak = s.current >= 2 ? s.current : 0;      // one week (or day) isn't a streak yet
     return '<button class="strip-face' + cls + '" data-profile="' + esc(u.id) + '" aria-label="' +
-        esc(u.id === state.me.id ? "You" : u.name) + (live[u.id] ? ", at the gym now" : today(u) ? ", trained today" : "") + '">' +
-      '<span class="strip-ring">' + avatarHtml(u) + '</span>' +
+        esc(u.id === state.me.id ? "You" : u.name) + (live[u.id] ? ", at the gym now" : today(u) ? ", trained today" : "") +
+        (streak ? ", " + streak + "-" + streakUnit(s.mode) + " streak" : "") + '">' +
+      '<span class="strip-ring">' + avatarHtml(u) +
+        (streak ? '<span class="strip-streak" aria-hidden="true">' + FLAME_SVG.replace("streak-flame", "strip-flame") + streak + '</span>' : '') +
+      '</span>' +
       '<span class="strip-name">' + esc(firstName(u)) + '</span></button>';
   }).join("") +
     '<button class="strip-face is-invite" id="feed-invite" aria-label="Invite a friend">' +
@@ -382,7 +389,7 @@ function boardStripHtml(friends) {
   var pref = boardPrefs();
   var top = boardRows(pref.kind, pref.range, friends).filter(function (r) { return r.value > 0; }).slice(0, 3);
   var board = BOARDS.filter(function (x) { return x.id === pref.kind; })[0];
-  var label = pref.kind === "streak" ? "Streak"
+  var label = pref.kind === "streak" ? "Active weeks"
     : (pref.kind === "workouts" ? "" : board.label + " · ") + (pref.range === "month" ? "This month" : "This week");
   return '<button class="board-strip" id="feed-board">' +
     '<span class="board-label">' + esc(label) + '</span>' +
@@ -452,26 +459,6 @@ function weeksInARow(userId) {
   return n;
 }
 
-function milestonesHtml(friends) {
-  var rows = [];
-  friends.forEach(function (u) {
-    var n = weeksInARow(u.id);
-    if (n < 3) return;
-    var latest = workoutsOf(u.id).sort(function (a, b) { return new Date(b.performedAt) - new Date(a.performedAt); })[0];
-    rows.push({ u: u, n: n, wk: latest });
-  });
-  rows.sort(function (a, b) { return b.n - a.n; });
-  return rows.slice(0, 2).map(function (r) {
-    var mine = myReaction(r.wk);
-    return '<div class="milestone">' +
-      '<span class="milestone-icon">🔥</span>' +
-      '<span class="milestone-text" data-profile="' + esc(r.u.id) + '"><strong>' + esc(firstName(r.u)) + '</strong> is on a ' +
-        r.n + '-week streak</span>' +
-      '<button class="milestone-react' + (mine ? " is-mine" : "") + '" data-react="' + esc(r.wk.id) + '|' +
-        esc(mine || "🔥") + '">' + esc(mine || "🔥") + (mine ? " Sent" : " React") + '</button>' +
-    '</div>';
-  }).join("");
-}
 
 /* the three numbers that describe a workout at a glance */
 function statStripHtml(wk) {
@@ -711,7 +698,7 @@ export function renderFriends() {
   });
   rows.sort(function (a, b) { return new Date(b.wk.performedAt) - new Date(a.wk.performedAt); });
 
-  var html = friendStripHtml(friends) + boardStripHtml(friends) + milestonesHtml(friends);
+  var html = friendStripHtml(friends) + boardStripHtml(friends);
 
   if (!rows.length) {
     html += '<div class="empty-state">Nothing logged yet. Your workouts and your friends&rsquo; show up here.</div>';
@@ -818,8 +805,11 @@ function openUserProfile(u) {
     '</div>';
 
   if (rel === "friend") {
+    var st = computeStreak(u.id);
     html += '<div class="stat-grid up-stats">' +
       '<div class="stat-tile"><span class="num">' + thisWeek + '</span><span class="label">This week</span></div>' +
+      '<div class="stat-tile"><span class="num is-streak">' + FLAME_SVG.replace("streak-flame", "streak-flame" + (st.current ? "" : " cold")) +
+        st.current + '</span><span class="label">' + streakUnit(st.mode) + ' streak</span></div>' +
       '<div class="stat-tile"><span class="num">' + (theirs[0] ? esc(shortDate(theirs[0].performedAt)) : "--") +
         '</span><span class="label">Last workout</span></div></div>';
     html += '<div class="manage-head">Recent workouts</div>';

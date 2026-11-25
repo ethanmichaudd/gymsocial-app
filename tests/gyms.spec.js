@@ -8,6 +8,7 @@ import { test } from "@playwright/test";
 import fs from "node:fs";
 import { check, URL_, SCREENS } from "./support/harness.js";
 import { makeDb, install, installMaps, sessionScript, ME, G1, G2, G3, G4 } from "./support/supabase.js";
+const flat = (t) => t.replace(/\s+/g, " ").trim();
 
 let browser;      // set by each test: the helpers below open their pages with it
 
@@ -30,7 +31,7 @@ async function open({ signedIn, legacy = false, theme = "light" }) {
   return { context, page, db, errors };
 }
 const shot = (page, name) => page.screenshot({ path: `${SCREENS}/${name}.png` });
-const rowsText = (page) => page.locator("#places-list .place-row").allInnerTexts().then((a) => a.map((t) => t.replace(/\s+/g, " ").trim()));
+const rowsText = (page) => page.locator("#places-list .place-row:not(.is-osm)").allInnerTexts().then((a) => a.map((t) => t.replace(/\s+/g, " ").trim()));
 const toast = (page) => page.innerText("#toast");
 const state = (page) => page.evaluate(() => JSON.parse(localStorage.getItem("gymsocial_v1")));
 
@@ -51,30 +52,47 @@ for (const theme of ["light", "dark"]) test(`Signed in (${theme})`, async ({ bro
   check(T + "list: 3 gyms people train at, not the empty one", rows.length === 3 && !rows.some((r) => /Empty Gym/.test(r)), rows.join(" || "));
   check(T + "list: friends first, with avatars count and today", /^Planet Fitness - Boston, MA.*1 friend, 1 today.*2 people this month/.test(rows[0] || ""), rows[0]);
   check(T + "list: counts only for strangers' gym", rows.some((r) => /Crunch Fitness - Cambridge, MA.*3 people this month/.test(r)), rows.join(" || "));
-  check(T + "map drawn with attribution", (await page.locator("#places-map.leaflet-container").count()) === 1 && /OpenStreetMap/.test(await page.innerText("#places-map .leaflet-control-attribution")));
-  check(T + "tiles come from the configured server, Referer sent", db.tiles.length > 0 && db.tiles.every((t) => t.url.startsWith("https://tile.openstreetmap.org/") && t.referer.startsWith(URL_.slice(0, -1))), db.tiles[0] && JSON.stringify(db.tiles[0]));
-  check(T + "3 pins (one was looked up)", (await page.locator("#places-map .gym-pin").count()) === 3, await page.locator("#places-map .gym-pin").count());
+  check(T + "map drawn, credits OpenStreetMap and CARTO", (await page.locator("#places-map.leaflet-container").count()) === 1 && /OpenStreetMap.*CARTO/.test(await page.innerText("#places-map .leaflet-control-attribution")));
+  const style = theme === "dark" ? "/dark_all/" : "/rastertiles/voyager/";
+  check(T + "the clean " + (theme === "dark" ? "dark" : "light") + " map (the stock OpenStreetMap address in app_config doesn't override it), sharp, Referer sent",
+    db.tiles.length > 0 && db.tiles.every((t) => /^https:\/\/[a-d]\.basemaps\.cartocdn\.com\//.test(t.url) && t.url.includes(style) && /@2x\.png$/.test(t.url) && t.referer.startsWith(URL_.slice(0, -1))), db.tiles[0] && JSON.stringify(db.tiles[0]));
+  check(T + "3 pins (one was looked up)", (await page.locator("#places-map .gym-pin:not(.is-osm)").count()) === 3, await page.locator("#places-map .gym-pin:not(.is-osm)").count());
   check(T + "address lookup: one request, for the gym with no pin", db.geo.length === 1 && db.geo[0].q === "915 commonwealth ave, boston, ma" && db.geo[0].format === "jsonv2" && db.geo[0].limit === "1" && db.geo[0].referer.startsWith(URL_.slice(0, -1)), JSON.stringify(db.geo));
   const pinPush = db.log.filter((l) => l.path.endsWith("/rpc/set_gym_location"));
   check(T + "looked-up pin saved for everyone", pinPush.length === 1 && pinPush[0].body.p_gym === G2 && Math.abs(pinPush[0].body.p_lat - 42.3519) < 1e-6, JSON.stringify(pinPush));
   await shot(page, `p2-${theme}-1-gyms`);
 
-  // ---- the whole screen scrolls, map included ----
-  const mapTop = (await page.locator("#places-map").boundingBox()).y;
-  const scrolled = await page.evaluate(() => { const el = document.getElementById("screen-gyms"); el.scrollTop = 160; return el.scrollTop; });
-  const mapTopAfter = (await page.locator("#places-map").boundingBox()).y;
-  check(T + "scrolling the Gyms screen moves the map with it", scrolled > 40 && Math.abs((mapTop - mapTopAfter) - scrolled) < 2, `scrolled ${scrolled}, map moved ${mapTop - mapTopAfter}`);
-  check(T + "one finger on the map scrolls the page (two move the map)", await page.evaluate(() => { const m = document.getElementById("places-map"); return getComputedStyle(m).touchAction.includes("pan-y") && !m.classList.contains("leaflet-touch-drag"); }), await page.evaluate(() => getComputedStyle(document.getElementById("places-map")).touchAction + " " + document.getElementById("places-map").className));
-  // a sideways swipe on the map is someone trying to move it: tell them how
-  await page.evaluate(() => {
-    const m = document.getElementById("places-map"); const r = m.getBoundingClientRect();
-    const t = (x, y) => new Touch({ identifier: 1, target: m, clientX: x, clientY: y });
-    m.dispatchEvent(new TouchEvent("touchstart", { touches: [t(r.left + 60, r.top + 60)], bubbles: true }));
-    m.dispatchEvent(new TouchEvent("touchmove", { touches: [t(r.left + 130, r.top + 64)], bubbles: true }));
-  });
-  check(T + "sideways swipe on the map shows the two-finger hint", await page.locator("#places-map-hint").isVisible() && /two fingers/.test(await page.innerText("#places-map-hint")));
-  await page.evaluate(() => { document.getElementById("screen-gyms").scrollTop = 0; });
+  // ---- full-screen map, sheet over it ----
+  const mapBox = await page.locator("#places-map").boundingBox();
+  check(T + "the map fills the screen between the header and the tab bar", mapBox.height > 600 && mapBox.width >= 386, JSON.stringify(mapBox));
+  check(T + "one finger moves the map (it no longer scrolls with a page)", await page.evaluate(() => document.getElementById("places-map").classList.contains("leaflet-touch-drag")));
+  check(T + "the sheet starts at half height", (await page.getAttribute("#places-sheet", "data-snap")) === "half");
+  const sheetTop = async () => (await page.locator("#places-sheet").boundingBox()).y;
+  const half = await sheetTop();
+  await page.click("#places-grab"); await page.waitForTimeout(450);
+  check(T + "tap the handle: all the way up", (await page.getAttribute("#places-sheet", "data-snap")) === "full" && (await sheetTop()) < half - 200);
+  await page.click("#places-grab"); await page.waitForTimeout(450);
+  // drag the handle down with a finger-like pointer
+  const g = await page.locator("#places-grab").boundingBox();
+  await page.mouse.move(g.x + g.width / 2, g.y + 8); await page.mouse.down();
+  for (let i = 1; i <= 6; i++) { await page.mouse.move(g.x + g.width / 2, g.y + 8 + i * 45); await page.waitForTimeout(16); }
+  await page.mouse.up(); await page.waitForTimeout(450);
+  check(T + "drag it down: tucks away to just the search box", (await page.getAttribute("#places-sheet", "data-snap")) === "peek" && await page.locator("#places-search").isVisible());
+  await shot(page, `p2-${theme}-1b-peek`);
+  await page.click("#places-grab"); await page.waitForTimeout(450);
+  check(T + "and back to half", (await page.getAttribute("#places-sheet", "data-snap")) === "half");
 
+  // ---- real gyms nearby, from the map's data ----
+  await page.waitForTimeout(1200);
+  const list = flat(await page.innerText("#places-list"));
+  check(T + "lists what's in view: IN THIS AREA, then MORE GYMS HERE", /In this area/i.test(list) && /More gyms here/i.test(list), list);
+  const osm = await page.locator("#places-list .place-row.is-osm").allInnerTexts();
+  check(T + "suggests real gyms nobody has added", osm.some((t) => /Boston Sports Club/.test(t)) && osm.some((t) => /Iron Temple/.test(t)), osm.join(" | "));
+  check(T + "but not one that's already on GymSocial, or one with no name", !osm.some((t) => /Planet Fitness/.test(t)) && osm.length === 2, osm.join(" | "));
+  check(T + "their pins are on the map too, hollow", (await page.locator("#places-map .gym-pin.is-osm").count()) === 2);
+  check(T + "asked politely: POST, the area in view only, Referer sent", db.overpass.length >= 1 && db.overpass.length <= 4 && db.overpass.every((o) => o.method === "POST" && /leisure"="fitness_centre"/.test(o.q) && /\(42\.\d\d,-71\.\d\d,42\.\d\d,-71\.\d\d\)/.test(o.q) && o.referer.startsWith(URL_.slice(0, -1))), JSON.stringify(db.overpass.map((o) => o.q.slice(0, 120))));
+  const asked = db.overpass.length;
+  await page.evaluate(() => window.scrollTo(0, 0));
   // ---- search: local only ----
   const geoBefore = db.geo.length;
   await page.fill("#places-search", "crunch");
@@ -107,7 +125,7 @@ for (const theme of ["light", "dark"]) test(`Signed in (${theme})`, async ({ bro
   check(T + "near me: off again", (await page.locator("#places-map .you-dot").count()) === 0 && !/ mi/.test((await rowsText(page)).join(" ")));
 
   // ---- gym page ----
-  await page.locator('#places-list .place-row', { hasText: "Planet Fitness" }).click();
+  await page.locator('#places-list .place-row:not(.is-osm)', { hasText: "Planet Fitness" }).click();
   await page.waitForTimeout(900);
   let body = (await page.innerText("#gym-modal-body")).replace(/\s+/g, " ");
   check(T + "gym page: header + address", (await page.innerText("#gym-modal-name")) === "Planet Fitness" && /100 Cambridge St, Boston, MA/.test(await page.innerText("#gym-modal-city")));
@@ -144,7 +162,7 @@ for (const theme of ["light", "dark"]) test(`Signed in (${theme})`, async ({ bro
   check(T + "my gym tagged and first in the list", /^Planet Fitness - Boston, MA MY GYM/i.test((await rowsText(page))[0] || ""), (await rowsText(page))[0]);
 
   // ---- move a pin: refused for a gym you don't train at ----
-  await page.locator('#places-list .place-row', { hasText: "Crunch" }).click();
+  await page.locator('#places-list .place-row:not(.is-osm)', { hasText: "Crunch" }).click();
   await page.waitForTimeout(600);
   await page.click("#gym-pin-move");
   await page.waitForTimeout(700);
@@ -160,7 +178,7 @@ for (const theme of ["light", "dark"]) test(`Signed in (${theme})`, async ({ bro
   await page.click("#gym-modal-close");
 
   // ---- move a pin: your own gym ----
-  await page.locator('#places-list .place-row', { hasText: "BU FitRec" }).click();
+  await page.locator('#places-list .place-row:not(.is-osm)', { hasText: "BU FitRec" }).click();
   await page.waitForTimeout(600);
   check(T + "your own gym has Edit", await page.locator("#gym-modal-edit").isVisible());
   await page.click("#gym-pin-move");
@@ -295,11 +313,11 @@ test("Database that hasn't run 008", async ({ browser: b }) => {
   await page.waitForTimeout(6500);
   const rows = await rowsText(page);
   check("pre-008: every gym listed (no counts to filter by)", rows.length === 4 && !/people this month/.test(rows.join(" ")), rows.join(" || "));
-  check("pre-008: pins worked out on this phone", (await page.locator("#places-map .gym-pin").count()) === 4, await page.locator("#places-map .gym-pin").count());
+  check("pre-008: pins worked out on this phone", (await page.locator("#places-map .gym-pin:not(.is-osm)").count()) === 4, await page.locator("#places-map .gym-pin:not(.is-osm)").count());
   const gaps = db.geo.slice(1).map((g, i) => g.t - db.geo[i].t);
   check("pre-008: lookups still a second apart", db.geo.length === 4 && gaps.every((g) => g >= 1000), db.geo.length + " / " + gaps.join(","));
   await shot(page, "p2-legacy-gyms");
-  await page.locator('#places-list .place-row', { hasText: "BU FitRec" }).click();
+  await page.locator('#places-list .place-row:not(.is-osm)', { hasText: "BU FitRec" }).click();
   await page.waitForTimeout(700);
   const body = (await page.innerText("#gym-modal-body")).replace(/\s+/g, " ");
   check("pre-008: gym page falls back to what you train here", /WHAT YOU TRAIN HERE 1 Back Squat 1 session/i.test(body) && !/Popular here/i.test(body), body);
@@ -321,7 +339,7 @@ test("Database that hasn't run 008", async ({ browser: b }) => {
   const n = db.geo.length;
   await page.click('[data-tab="gyms"]');
   await page.waitForTimeout(2500);
-  check("pre-008: after a reload the pins come from this phone's memory, no new lookups", db.geo.length === n && (await page.locator("#places-map .gym-pin").count()) === 4, (db.geo.length - n) + " new / pins " + await page.locator("#places-map .gym-pin").count());
+  check("pre-008: after a reload the pins come from this phone's memory, no new lookups", db.geo.length === n && (await page.locator("#places-map .gym-pin:not(.is-osm)").count()) === 4, (db.geo.length - n) + " new / pins " + await page.locator("#places-map .gym-pin:not(.is-osm)").count());
   check("pre-008: no console errors", errors.length === 0, errors.join(" || "));
   await context.close();
 });
@@ -359,9 +377,9 @@ for (const theme of ["light", "dark"]) test(`Signed out (${theme})`, async ({ br
   await page.fill("#gym-add-state", "ma");
   await page.click("#gym-add-save");
   await page.waitForTimeout(2200);
-  check(T + "added gym listed and pinned", /Test Gym - Boston, MA/.test((await rowsText(page))[0] || "") && (await page.locator("#places-map .gym-pin").count()) === 1 && await page.locator("#places-map-note").isHidden(), (await rowsText(page)).join("|"));
+  check(T + "added gym listed and pinned", /Test Gym - Boston, MA/.test((await rowsText(page))[0] || "") && (await page.locator("#places-map .gym-pin:not(.is-osm)").count()) === 1 && await page.locator("#places-map-note").isHidden(), (await rowsText(page)).join("|"));
   await shot(page, `p2-signedout-${theme}-gyms`);
-  await page.locator("#places-list .place-row").first().click();
+  await page.locator("#places-list .place-row:not(.is-osm)").first().click();
   await page.waitForTimeout(700);
   const body = (await page.innerText("#gym-modal-body")).replace(/\s+/g, " ");
   check(T + "gym page works without an account", /WHAT YOU TRAIN HERE/i.test(body) && /Check in here/.test(body) && (await page.locator("#gym-map .gym-pin").count()) === 1, body);
@@ -372,5 +390,60 @@ for (const theme of ["light", "dark"]) test(`Signed out (${theme})`, async ({ br
   await page.click("#log-cancel");
   check(T + "nothing sent to the account server for gyms", !db.log.some((l) => /gym/.test(l.path)));
   check(T + "no console errors", errors.length === 0, errors.join(" || "));
+  await context.close();
+});
+
+// ---------- a real gym from the map, added in one tap ----------
+test("Gyms from the map: add one, and they're asked about once", async ({ browser: b }) => {
+  browser = b;
+  const { context, page, db, errors } = await open({ signedIn: true });
+  await page.click('[data-tab="gyms"]');
+  await page.waitForTimeout(4000);
+  const geoBefore = db.geo.length;
+  await page.locator("#places-list .place-row.is-osm", { hasText: "Boston Sports Club" }).click();
+  await page.waitForTimeout(400);
+  const sheet = flat(await page.innerText("#list-modal-body"));
+  check("tapping one says it isn't on GymSocial yet, with Add and Directions", /Boston Sports Club/.test(sheet) && /560 Washington St · Boston, MA/.test(sheet) && /Nobody has added this gym/.test(sheet) && (await page.locator("#osm-maps").getAttribute("href")).startsWith("https://maps.apple.com/?q=Boston%20Sports%20Club&ll=42.355,-71.065"), sheet);
+  await shot(page, "p2-osm-sheet");
+  await page.click("#osm-add"); await page.waitForTimeout(900);
+  check("Add: opens its gym page", (await page.innerText("#gym-modal-name")) === "Boston Sports Club");
+  const st = await state(page);
+  const added = st.gyms.find((g) => g.name === "Boston Sports Club");
+  check("added with the map's pin and address, so no lookup was needed", !!added && added.lat === 42.355 && added.lng === -71.065 && added.street === "560 Washington St" && added.city === "Boston" && added.state === "MA" && db.geo.length === geoBefore, JSON.stringify(added) + " geo+" + (db.geo.length - geoBefore));
+  await page.waitForTimeout(2500);
+  const pushed = db.gyms.find((g) => g.name === "Boston Sports Club");
+  check("and it's on GymSocial for everyone, pin included", !!pushed && Math.abs(pushed.lat - 42.355) < 1e-6, JSON.stringify(pushed));
+  await page.click("#gym-modal-close"); await page.waitForTimeout(400);
+  const osm = await page.locator("#places-list .place-row.is-osm").allInnerTexts();
+  check("it's no longer a suggestion, it's a gym", !osm.some((t) => /Boston Sports Club/.test(t)) && (await rowsText(page)).some((t) => /Boston Sports Club - Boston, MA/.test(t)), osm.join(" | "));
+
+  // one with no town: the town is looked up from the pin, once
+  await page.locator("#places-list .place-row.is-osm", { hasText: "Iron Temple" }).click();
+  await page.waitForTimeout(300);
+  await page.click("#osm-add"); await page.waitForTimeout(2200);
+  const iron = (await state(page)).gyms.find((g) => g.name === "Iron Temple");
+  const rev = db.geo.filter((g) => g.reverse);
+  check("no town on the map: asked where the pin is (one reverse lookup)", !!iron && iron.city === "Boston" && iron.state === "MA" && rev.length === 1 && rev[0].lat === "42.348", JSON.stringify(iron) + " " + JSON.stringify(rev));
+  await page.click("#gym-modal-close"); await page.waitForTimeout(300);
+
+  // the same area again, after a reload: answered from this phone
+  const n = db.overpass.length;
+  await page.reload(); await page.waitForTimeout(2500);
+  await page.click('[data-tab="gyms"]'); await page.waitForTimeout(3500);
+  check("coming back to the same area asks nothing new", db.overpass.length === n, (db.overpass.length - n) + " new");
+  check("no console errors", errors.length === 0, errors.join(" || "));
+  await context.close();
+});
+
+test("Gyms from the map: switched off from the database", async ({ browser: b }) => {
+  browser = b;
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, serviceWorkers: "block" });
+  const db = makeDb(); db.placesOff = true;
+  await install(context, db); await installMaps(context, db);
+  await context.addInitScript(sessionScript());
+  const page = await context.newPage();
+  await page.goto(URL_); await page.waitForTimeout(2500);
+  await page.click('[data-tab="gyms"]'); await page.waitForTimeout(3500);
+  check("with places off in app_config, the map's data is never asked", db.overpass.length === 0 && (await page.locator("#places-list .place-row.is-osm").count()) === 0, String(db.overpass.length));
   await context.close();
 });

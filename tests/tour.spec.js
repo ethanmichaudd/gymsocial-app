@@ -35,9 +35,14 @@ for (const theme of ["light", "dark"]) test(`First open: the tour (${theme})`, a
   }
   check(theme + ": a first-time visitor gets the tour", await shown(page));
   const titles = await page.$$eval(".tour-title", (els) => els.map((e) => e.textContent));
-  check(theme + ": four cards", titles.join(" | ") === "Log it in seconds | Train with your friends | Your gym is a place | Set your weekly goal", titles.join(" | "));
+  check(theme + ": welcome, seven on logging, then friends, gyms, goal", titles.join(" | ") === "Welcome to GymSocial | Start a workout | Add an exercise | Pick the equipment | Log your sets | Cardio counts too | Finish and save | Change it later | Train with your friends | Your gym is a place | Set your weekly goal", titles.join(" | "));
+  check(theme + ": each card says which part it's about", (await page.$$eval(".tour-chapter", (els) => els.map((e) => e.textContent))).join(",") === ",Logging,Logging,Logging,Logging,Logging,Logging,Logging,Friends,Gyms,Your goal");
   await page.screenshot({ path: `${SCREENS}/tour-${theme}-1.png` });
-  for (let i = 0; i < 3; i++) { await page.click("#tour-next"); await page.waitForTimeout(500); }
+  for (let i = 0; i < 10; i++) {
+    await page.click("#tour-next"); await page.waitForTimeout(450);
+    if (i === 2) await page.screenshot({ path: `${SCREENS}/tour-${theme}-equip.png` });
+    if (i === 6) await page.screenshot({ path: `${SCREENS}/tour-${theme}-swipe.png` });
+  }
   await page.screenshot({ path: `${SCREENS}/tour-${theme}-4.png` });
   check(theme + ": last card swaps Next for the way in", await page.locator("#tour-next").isHidden() && await page.locator("#tour-signup").isVisible() && await page.locator("#tour-start").isVisible());
   await page.click('[data-tour-goal="4"]');
@@ -60,7 +65,7 @@ for (const theme of ["light", "dark"]) test(`First open: the tour (${theme})`, a
 
 test("Tour: swipe between cards, and Just start logging", async ({ browser }) => {
   const { context, page, errors } = await open(browser);
-  await page.evaluate(() => { const t = document.getElementById("tour-track"); t.scrollTo({ left: t.clientWidth * 3 }); });
+  await page.evaluate(() => { const t = document.getElementById("tour-track"); t.scrollTo({ left: t.clientWidth * 10 }); });
   await page.waitForTimeout(600);
   check("swiping to the last card shows its buttons", await page.locator("#tour-start").isVisible());
   await page.click("#tour-start"); await page.waitForTimeout(500);

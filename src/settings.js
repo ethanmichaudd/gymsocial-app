@@ -175,7 +175,7 @@ export function renderSettings() {
         '<button class="settings-row" id="open-tour" style="margin-top:8px;">' +
           '<span class="settings-row-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M9.6 9.3a2.5 2.5 0 1 1 3.4 2.3c-.6.3-1 .8-1 1.5v.4"/><circle cx="12" cy="16.6" r=".6" fill="currentColor"/></svg></span>' +
           '<span class="person-body"><span class="person-name">Take the tour</span>' +
-            '<span class="person-sub">What GymSocial can do, in four cards</span></span>' +
+            '<span class="person-sub">How to log, add equipment, friends and gyms</span></span>' +
           '<span class="chevron">&rsaquo;</span>' +
         '</button>' +
       '</div>' +

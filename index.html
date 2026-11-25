@@ -109,27 +109,30 @@
     </section>
 
     <!-- GYMS -->
-    <section class="screen" id="screen-gyms">
-      <div class="screen-head"><h1>Gyms</h1></div>
-      <div class="places-search">
-        <div class="find-box">
-          <svg class="find-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></svg>
-          <input type="search" id="places-search" placeholder="Name or city" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="search" aria-label="Search gyms by name or city">
-          <button type="button" class="find-clear" id="places-clear" aria-label="Clear search" hidden>
-            <svg viewBox="0 0 24 24" stroke-width="2.4" stroke-linecap="round"><path d="M7 7l10 10M17 7L7 17"/></svg>
-          </button>
-        </div>
-        <button type="button" class="near-btn" id="places-near" aria-pressed="false">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 4 4 11l7 2 2 7z"/></svg>
-          Near me
-        </button>
-      </div>
+    <section class="screen is-map" id="screen-gyms">
+      <h1 class="sr-only">Gyms</h1>
       <div class="places-map-wrap">
         <div class="places-map" id="places-map" role="application" aria-label="Map of gyms"></div>
         <div class="places-map-note" id="places-map-note" hidden></div>
-        <div class="places-map-note is-hint" id="places-map-hint" hidden>Use two fingers to move the map</div>
+        <button type="button" class="map-fab" id="places-near" aria-pressed="false" aria-label="Show gyms near me">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 4 4 11l7 2 2 7z"/></svg>
+        </button>
       </div>
-      <div class="places-list" id="places-list"></div>
+      <div class="map-sheet" id="places-sheet" data-snap="half">
+        <button type="button" class="map-sheet-grab" id="places-grab" aria-label="Show more gyms"><span class="grabber"></span></button>
+        <div class="places-search">
+          <div class="find-box">
+            <svg class="find-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></svg>
+            <input type="search" id="places-search" placeholder="Search gyms" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="search" aria-label="Search gyms by name or city">
+            <button type="button" class="find-clear" id="places-clear" aria-label="Clear search" hidden>
+              <svg viewBox="0 0 24 24" stroke-width="2.4" stroke-linecap="round"><path d="M7 7l10 10M17 7L7 17"/></svg>
+            </button>
+          </div>
+        </div>
+        <div class="map-sheet-body" id="places-body">
+          <div class="places-list" id="places-list"></div>
+        </div>
+      </div>
     </section>
 
     <!-- FRIENDS -->

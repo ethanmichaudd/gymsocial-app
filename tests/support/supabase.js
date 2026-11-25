@@ -70,7 +70,7 @@ export function makeDb({ legacy = false, legacy9 = false } = {}) {
     counts: { [G1]: [2, 5, 9], [G2]: [1, 1, 1], [G3]: [3, 7, 12], [G4]: [0, 0, 0] },
     stats: { people_30d: 14, sessions_30d: 40, top_exercises: [{ name: "Bench Press", sets: 214 }, { name: "Lat Pulldown", sets: 160 }, { name: "Back Squat", sets: 1 }],
              by_hour: [0,0,0,0,0,1,3,6,4,2,1,1,2,1,1,2,5,8,12,7,3,1,0,0] },
-    geo: [], tiles: [], legacy9,
+    geo: [], tiles: [], overpass: [], legacy9,
     comments: [
       { id: "cccccccc-0000-4000-8000-000000000001", workout_id: W1, user_id: MAYA, body: "245 for 5?? strong", created_at: ago(30) },
       { id: "cccccccc-0000-4000-8000-000000000002", workout_id: W2, user_id: DEV, body: "nice session", created_at: ago(90) },
@@ -193,7 +193,7 @@ export async function install(context, db) {
     if (path.startsWith("/rest/v1/rpc/")) return route.fulfill({ status: 204, headers: CORS });
     if (path === "/rest/v1/app_config") {
       if (db.legacy) return json(route, { code: "PGRST205", message: "Could not find the table 'public.app_config' in the schema cache" }, 404);
-      return json(route, [{ value: { geocoding: db.geocodingOff ? false : true, geocoder_url: "https://nominatim.openstreetmap.org/search", tile_url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png" } }]);
+      return json(route, [{ value: { geocoding: db.geocodingOff ? false : true, places: db.placesOff ? false : undefined, geocoder_url: "https://nominatim.openstreetmap.org/search", tile_url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png" } }]);
     }
 
     const table = path.replace("/rest/v1/", "");
@@ -281,13 +281,37 @@ export async function install(context, db) {
 
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mO8e/fufwAIoQNiMxzc5AAAAABJRU5ErkJggg==", "base64");
 /** Stand-ins for the map tiles and the address lookup; both record what was asked. */
+/* Real gyms "from the map's data" around Boston: one is Planet Fitness, which
+   is already on GymSocial (so it must not be suggested twice), one has no
+   town (so adding it asks where it is), one has no name (skipped). */
+export const OSM_GYMS = {
+  elements: [
+    { type: "node", id: 101, lat: 42.3550, lon: -71.0650, tags: { leisure: "fitness_centre", name: "Boston Sports Club", "addr:housenumber": "560", "addr:street": "Washington St", "addr:city": "Boston", "addr:state": "MA" } },
+    { type: "way", id: 202, center: { lat: 42.36012, lon: -71.06255 }, tags: { leisure: "fitness_centre", name: "Planet Fitness" } },
+    { type: "node", id: 303, lat: 42.3480, lon: -71.0820, tags: { amenity: "gym", name: "Iron Temple" } },
+    { type: "node", id: 404, lat: 42.3500, lon: -71.0700, tags: { leisure: "fitness_centre" } },
+  ],
+};
+
 export async function installMaps(context, db) {
-  await context.route("https://tile.openstreetmap.org/**", (route) => {
+  const tile = (route) => {
     db.tiles.push({ url: route.request().url(), referer: route.request().headers()["referer"] || "" });
     return route.fulfill({ status: 200, contentType: "image/png", body: PNG });
+  };
+  await context.route("https://tile.openstreetmap.org/**", tile);
+  await context.route(/^https:\/\/[a-d]\.basemaps\.cartocdn\.com\//, tile);
+  await context.route("https://overpass-api.de/**", (route) => {
+    const body = decodeURIComponent((route.request().postData() || "").replace(/^data=/, "").replace(/\+/g, " "));
+    db.overpass.push({ q: body, referer: route.request().headers()["referer"] || "", method: route.request().method() });
+    return route.fulfill({ status: 200, headers: { "access-control-allow-origin": "*", "content-type": "application/json" }, body: JSON.stringify(db.osm || OSM_GYMS) });
   });
   await context.route("https://nominatim.openstreetmap.org/**", (route) => {
     const u = new URL(route.request().url());
+    if (u.pathname.endsWith("/reverse")) {
+      db.geo.push({ t: Date.now(), reverse: true, lat: u.searchParams.get("lat"), lon: u.searchParams.get("lon") });
+      return route.fulfill({ status: 200, headers: { "access-control-allow-origin": "*", "content-type": "application/json" },
+        body: JSON.stringify({ address: { city: "Boston", state: "Massachusetts", "ISO3166-2-lvl4": "US-MA" } }) });
+    }
     const qq = (u.searchParams.get("q") || "").toLowerCase();
     db.geo.push({ t: Date.now(), q: qq, referer: route.request().headers()["referer"] || "", format: u.searchParams.get("format"), limit: u.searchParams.get("limit") });
     let out = [{ lat: "42.3550", lon: "-71.0700" }];

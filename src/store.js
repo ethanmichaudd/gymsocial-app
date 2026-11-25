@@ -958,13 +958,21 @@ const DEMO_USERS = ["demo_friend", "demo_friend_2"];
 export const USERNAME_RULE = /^[a-z0-9_.]{3,20}$/;
 
 function userFromProfile(p) {
-  return {
+  const u = {
     id: p.id,
     name: p.display_name || p.username,
     handle: p.username,
     avatar: p.avatar || null,
     isPrivate: Boolean(p.is_private),
   };
+  // how they count their streak, so you see the same number they do
+  if (p.streak_mode) {
+    u.streakRule = {
+      streakMode: p.streak_mode, weeklyGoal: p.weekly_goal ?? 3,
+      customCount: p.custom_count ?? 4, customDays: p.custom_days ?? 10,
+    };
+  }
+  return u;
 }
 
 /* Supabase's `in` filter goes in the URL, so long id lists go in batches. */
@@ -1022,7 +1030,7 @@ async function pullSocial() {
   // ---- people ----
   const people = [...new Set([...friendIds, ...incoming, ...outgoing])];
   const profiles = people.length
-    ? await selectIn("profiles", "id,username,display_name,avatar,is_private", "id", people)
+    ? await selectIn("profiles", "id,username,display_name,avatar,is_private,weekly_goal,streak_mode,custom_count,custom_days", "id", people)
     : [];
   const meRow = (state.users || []).find((u) => u.id === uid) ||
     { id: uid, name: state.me.name, handle: state.me.handle, avatar: state.me.avatar, isPrivate: state.me.isPrivate };

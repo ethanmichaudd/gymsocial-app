@@ -7,8 +7,8 @@ import {
   adoptGym, currentUser, fetchGymDirectory, fetchGymStats, fetchMapConfig, saveGymLocation
 } from "./store.js";
 import {
-  canLocate, closestGym, distanceKm, formatDistance, locateGym, MAP_ATTRIBUTION, mapConfig,
-  setMapConfig
+  canAskNearby, canLocate, closestGym, distanceKm, formatDistance, locateGym, lookUpNearby,
+  mapAttribution, mapConfig, nameLikeness, nearbyKnown, placeOf, setMapConfig, tileUrlFor
 } from "./geo.js";
 import {
   activateTab, avatarHtml, calendarDate, closeListSheet, currentTab, esc, findExercise,
@@ -319,9 +319,29 @@ function loadLeaflet() {
   return leafletLoading;
 }
 
+/* The map's look follows the theme: a light street map, or a dark one.
+   Every live map swaps when the theme changes. */
+var tiledMaps = [];
+function isDark() { return document.documentElement.getAttribute("data-theme") === "dark"; }
 function addTiles(map) {
-  Leaflet.tileLayer(mapConfig().tileUrl, { maxZoom: 19, attribution: MAP_ATTRIBUTION }).addTo(map);
-  map.attributionControl.setPrefix(false);
+  var dark = isDark();
+  map._gsTiles = Leaflet.tileLayer(tileUrlFor(dark), {
+    maxZoom: 19, subdomains: "abcd", detectRetina: false, attribution: mapAttribution()
+  }).addTo(map);
+  map._gsDark = dark;
+  if (map.attributionControl) map.attributionControl.setPrefix(false);
+  tiledMaps = tiledMaps.filter(function (m) { return m._container && document.body.contains(m._container); });
+  tiledMaps.push(map);
+}
+if (typeof MutationObserver !== "undefined") {
+  new MutationObserver(function () {
+    var dark = isDark();
+    tiledMaps.forEach(function (m) {
+      if (m._gsDark === dark || !m._gsTiles) return;
+      m._gsTiles.setUrl(tileUrlFor(dark));
+      m._gsDark = dark;
+    });
+  }).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
 }
 
 function pinIcon(kind) {
@@ -336,15 +356,24 @@ function pinIcon(kind) {
 var MAP_OFF_HTML = '<div class="map-off">The map needs a connection.</div>';
 var NOWHERE = [39.5, -98.35];     // middle of the US, zoomed out: shown only when there's nothing to show
 
-/* ----------------------------- gyms tab ----------------------------- */
+/* ----------------------------- gyms tab -----------------------------
+   Like Apple Maps: the map fills the screen and a sheet you drag up and
+   down sits over it. With nothing typed, the sheet lists the gyms in the
+   part of the map you're looking at: first the ones on GymSocial, then
+   real gyms from the map's data that nobody has added yet (one tap adds
+   one, pin and all). Move the map and the list follows. */
 
 var placesQuery = "";
 var placesLoc = null;         // where you are, after "Near me". Never stored or sent anywhere.
+var placesLocating = false;
 var placesMap = null;
 var placesPins = null;
 var placesFit = null;         // what the map was last framed around
 var placesPinKey = null;
 var placesTouched = false;    // you've moved the map yourself since then
+var placesView = null;        // the part of the map above the sheet: { s, w, n, e, center }
+var nearbyBusy = false;
+var nearbyTimer = null;
 
 function placesRows() {
   var q = placesQuery.trim().toLowerCase();
@@ -380,6 +409,30 @@ function placesRows() {
   return rows;
 }
 
+function inView(g) {
+  var v = placesView;
+  return !!v && g.lat != null && g.lat >= v.s && g.lat <= v.n && g.lng >= v.w && g.lng <= v.e;
+}
+
+/* Real gyms from the map's data, in view, that aren't on GymSocial yet:
+   anything close to a known gym with a similar name is that gym. */
+function suggestions(known) {
+  if (!placesView) return [];
+  var q = placesQuery.trim().toLowerCase();
+  var all = allKnownGyms();
+  var from = placesLoc || placesView.center;
+  return nearbyKnown(placesView).filter(function (p) {
+    if (q && (p.name + " " + gymAddress(p)).toLowerCase().indexOf(q) === -1) return false;
+    return !all.some(function (g) {
+      if (g.lat == null) return nameLikeness(g.name, p.name) >= 0.8 && (!g.city || !p.city || g.city.toLowerCase() === p.city.toLowerCase());
+      var km = distanceKm(g, p);
+      return km < 0.06 || (km < 0.4 && nameLikeness(g.name, p.name) >= 0.5);
+    });
+  }).map(function (p) {
+    return { place: p, km: distanceKm(from, p) };
+  }).sort(function (a, b) { return a.km - b.km; }).slice(0, 12);
+}
+
 function pinKind(r) {
   return r.home ? "is-home" : (r.friends.length || r.gym.mine) ? "is-yours" : "";
 }
@@ -410,21 +463,65 @@ function placeRowHtml(r) {
   '</button>';
 }
 
+function suggestionRowHtml(s) {
+  var p = s.place;
+  var where = p.street || p.city || "";
+  return '<button class="place-row is-osm" data-osm="' + esc(p.id) + '">' +
+    '<span class="place-pin is-osm">' + PIN_SVG + '</span>' +
+    '<span class="person-body">' +
+      '<span class="person-name">' + esc(p.name) + '</span>' +
+      '<span class="person-sub place-sub">' + (where ? esc(where) + ' <span class="dot">&middot;</span> ' : '') +
+        'Not on GymSocial yet</span>' +
+    '</span>' +
+    '<span class="place-km">' + esc(formatDistance(s.km)) + '</span>' +
+    '<span class="place-add" aria-hidden="true">+</span>' +
+  '</button>';
+}
+
 var PIN_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" ' +
   'stroke-linejoin="round"><path d="M12 21s-6.5-5.7-6.5-11a6.5 6.5 0 0 1 13 0c0 5.3-6.5 11-6.5 11z"/>' +
   '<circle cx="12" cy="10" r="2.4"/></svg>';
+var NEAR_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" ' +
+  'stroke-linejoin="round"><path d="M20 4 4 11l7 2 2 7z"/></svg>';
 
-export function renderPlaces() {
-  var rows = placesRows();
+/* Just the sheet's list: cheap, so it can follow the map as it moves. */
+function renderPlacesList(rows) {
+  rows = rows || placesRows();
   var q = placesQuery.trim();
   var el = document.getElementById("places-list");
+  var html = "";
 
-  var html = rows.map(placeRowHtml).join("");
-  if (!rows.length) {
-    html = '<div class="empty-state">' + (q
+  if (!placesLoc) {
+    html += '<button class="near-card" id="places-near-card"' + (placesLocating ? " disabled" : "") + '>' +
+      '<span class="near-card-icon">' + NEAR_SVG + '</span>' +
+      '<span class="person-body"><span class="person-name">' + (placesLocating ? "Finding you&hellip;" : "Gyms closest to you") + '</span>' +
+      '<span class="person-sub">Use your location to see what&rsquo;s nearby</span></span></button>';
+  }
+
+  var here = q || !placesView ? rows : rows.filter(function (r) { return inView(r.gym); });
+  var away = q || !placesView ? [] : rows.filter(function (r) { return !inView(r.gym); });
+  var more = suggestions();
+
+  if (q) html += '<div class="sheet-head">Results</div>';
+  else html += '<div class="sheet-head">' + (placesLoc ? "Near you" : "In this area") +
+    (here.length ? ' <span class="sheet-count">' + here.length + '</span>' : '') + '</div>';
+  html += here.map(placeRowHtml).join("");
+  if (!here.length && !more.length) {
+    html += '<div class="empty-state">' + (q
       ? 'No gym matches “' + esc(q) + '”. If it’s new here, add it.'
+      : allKnownGyms().length ? "No gyms on GymSocial here yet. Move the map, or add one."
       : "No gyms yet. Add the one you train at and it shows up here.") + '</div>';
   }
+
+  if (more.length) {
+    html += '<div class="sheet-head">' + (q ? "On the map" : "More gyms here") +
+      '<span class="sheet-sub">Tap one to add it</span></div>' + more.map(suggestionRowHtml).join("");
+  } else if (nearbyBusy) {
+    html += '<div class="sheet-loading">Looking for more gyms here&hellip;</div>';
+  }
+
+  if (away.length) html += '<div class="sheet-head">Elsewhere</div>' + away.map(placeRowHtml).join("");
+
   html += '<button class="btn btn-ghost btn-block" id="places-add">+ Add a gym</button>';
   if (signedOut()) {
     html += '<p class="places-hint">Sign in to see where your friends train and how busy each gym is. ' +
@@ -435,15 +532,31 @@ export function renderPlaces() {
   el.querySelectorAll("[data-place]").forEach(function (row) {
     row.addEventListener("click", function () { openGymModal(row.getAttribute("data-place")); });
   });
+  el.querySelectorAll("[data-osm]").forEach(function (row) {
+    row.addEventListener("click", function () {
+      var id = row.getAttribute("data-osm");
+      var hit = more.filter(function (s) { return s.place.id === id; })[0];
+      if (hit) openSuggestion(hit.place);
+    });
+  });
+  var card = el.querySelector("#places-near-card");
+  if (card) card.addEventListener("click", function () { locateMe(false); });
   el.querySelector("#places-add").addEventListener("click", function () {
     openGymAdd(function (g) {
       renderPlaces();
       showToast("Added " + gymLabel(g) + ".");
     }, null, titleCase(placesQuery));
   });
+}
 
+export function renderPlaces() {
+  var rows = placesRows();
+  placeSheet();                  // sized before anything else, so it never flashes full-screen
+  renderPlacesList(rows);
   drawPlacesMap(rows);
   refreshDirectory(false);
+  // you said "near me" before: find you again (the choice is remembered, never the place)
+  if (!placesLoc && !placesLocating && state.settings.nearMe) locateMe(true);
 
   // fill in pins for gyms that have an address but aren't on the map yet
   rows.forEach(function (r) {
@@ -453,41 +566,194 @@ export function renderPlaces() {
   });
 }
 
+/* ---- the sheet ----
+   Three resting places: just the search box, about half the screen, or
+   nearly all of it. Drag the handle (or the list, once it's scrolled to
+   the top) and it settles at the nearest one; a flick goes one further. */
+var SNAPS = ["peek", "half", "full"];
+var sheetSnap = "half";
+
+function sheetSizes() {
+  var screen = document.getElementById("screen-gyms");
+  var h = screen.clientHeight || 600;
+  var top = 64;                                // room for the locate button above a full sheet
+  return { h: h, sheetH: h - top, peek: 88, half: Math.round(h * 0.46), full: h - top };
+}
+
+function sheetShown(snap) {
+  var z = sheetSizes();
+  return Math.min(z[snap || sheetSnap], z.sheetH);
+}
+
+function placeSheet(snap, animate) {
+  var sheet = document.getElementById("places-sheet");
+  if (!sheet) return;
+  if (snap) sheetSnap = snap;
+  var z = sheetSizes();
+  sheet.style.height = z.sheetH + "px";
+  sheet.classList.toggle("is-dragging", animate === false);
+  sheet.style.transform = "translateY(" + (z.sheetH - sheetShown()) + "px)";
+  sheet.setAttribute("data-snap", sheetSnap);
+  document.getElementById("places-grab").setAttribute("aria-label",
+    sheetSnap === "full" ? "Show more of the map" : "Show more gyms");
+  updateView();
+}
+
+function wireSheet() {
+  var sheet = document.getElementById("places-sheet");
+  var body = document.getElementById("places-body");
+  var grab = document.getElementById("places-grab");
+  var drag = null;
+
+  var start = function (y) {
+    var z = sheetSizes();
+    drag = { y0: y, t0: Date.now(), base: z.sheetH - sheetShown(), y: y, z: z };
+    sheet.classList.add("is-dragging");
+  };
+  var move = function (y) {
+    drag.y = y;
+    var top = Math.max(0, Math.min(drag.z.sheetH - drag.z.peek, drag.base + (y - drag.y0)));
+    sheet.style.transform = "translateY(" + top + "px)";
+  };
+  var end = function () {
+    var d = drag;
+    drag = null;
+    sheet.classList.remove("is-dragging");
+    if (!d) return;
+    var dy = d.y - d.y0;
+    var shown = d.z.sheetH - Math.max(0, d.base + dy);
+    var fast = Math.abs(dy) > 30 && Math.abs(dy) / Math.max(1, Date.now() - d.t0) > 0.5;
+    var i = SNAPS.indexOf(sheetSnap);
+    var next;
+    if (fast) next = SNAPS[Math.max(0, Math.min(2, i + (dy < 0 ? 1 : -1)))];
+    else next = SNAPS.slice().sort(function (a, b) { return Math.abs(d.z[a] - shown) - Math.abs(d.z[b] - shown); })[0];
+    if (Math.abs(dy) < 6) next = sheetSnap;
+    else grab._dragAt = Date.now();          // the click that ends a drag isn't a tap
+    placeSheet(next);
+  };
+
+  // the handle and the search row: mouse and touch alike
+  [grab, sheet.querySelector(".places-search")].forEach(function (zone) {
+    zone.addEventListener("pointerdown", function (e) {
+      if (e.target.closest("input, button:not(#places-grab)")) return;
+      if (e.button !== undefined && e.button !== 0) return;
+      zone.setPointerCapture && zone.setPointerCapture(e.pointerId);
+      start(e.clientY);
+      var mv = function (ev) { if (drag) move(ev.clientY); };
+      var up = function () {
+        zone.removeEventListener("pointermove", mv);
+        zone.removeEventListener("pointerup", up);
+        zone.removeEventListener("pointercancel", up);
+        end();
+      };
+      zone.addEventListener("pointermove", mv);
+      zone.addEventListener("pointerup", up);
+      zone.addEventListener("pointercancel", up);
+    });
+  });
+  // a tap on the handle steps through the sizes
+  grab.addEventListener("click", function () {
+    if (grab._dragAt && Date.now() - grab._dragAt < 400) return;
+    placeSheet(sheetSnap === "full" ? "half" : sheetSnap === "half" ? "full" : "half");
+  });
+
+  // the list: below full size a drag moves the sheet; at full size it
+  // scrolls, until it's back at the top and you keep pulling down
+  var t = null;
+  body.addEventListener("touchstart", function (e) {
+    if (e.touches.length !== 1) return;
+    t = { y0: e.touches[0].clientY, live: false };
+  }, { passive: true });
+  body.addEventListener("touchmove", function (e) {
+    if (!t) return;
+    var y = e.touches[0].clientY, dy = y - t.y0;
+    if (!t.live) {
+      if (Math.abs(dy) < 6) return;
+      var wantsSheet = sheetSnap !== "full" ? true : (dy > 0 && body.scrollTop <= 0);
+      if (!wantsSheet) { t = null; return; }
+      t.live = true;
+      start(t.y0);
+    }
+    e.preventDefault();
+    move(y);
+  }, { passive: false });
+  var tend = function () { if (t && t.live) end(); t = null; };
+  body.addEventListener("touchend", tend);
+  body.addEventListener("touchcancel", tend);
+
+  window.addEventListener("resize", function () { if (currentTab === "gyms") placeSheet(); });
+}
+
+/* ---- the map ---- */
+
+/* The part of the map you can see, above the sheet. The list and the
+   nearby lookup both use it. */
+function updateView() {
+  if (!placesMap) return;
+  var size = placesMap.getSize();
+  var bottom = Math.max(60, size.y - sheetShown());
+  var nw = placesMap.containerPointToLatLng([0, 0]);
+  var se = placesMap.containerPointToLatLng([size.x, bottom]);
+  var c = placesMap.containerPointToLatLng([size.x / 2, bottom / 2]);
+  placesView = { n: nw.lat, w: nw.lng, s: se.lat, e: se.lng, center: { lat: c.lat, lng: c.lng } };
+}
+
+/* Once the map stops: redraw the list for the new view, and (a moment
+   later, if it's still there) ask the map's data about gyms around it. */
+function mapSettled() {
+  updateView();
+  renderPlacesList();
+  drawSuggestionPins();
+  clearTimeout(nearbyTimer);
+  nearbyTimer = setTimeout(function () {
+    if (currentTab !== "gyms" || !placesView || !canAskNearby(placesView)) return;
+    var view = placesView;
+    nearbyBusy = true;
+    lookUpNearby(view).then(function (asked) {
+      nearbyBusy = false;
+      if (currentTab !== "gyms") return;
+      if (asked) { renderPlacesList(); drawSuggestionPins(); }
+    }, function () { nearbyBusy = false; });
+  }, 700);
+}
+
+var suggestPins = null;
+function drawSuggestionPins() {
+  if (!placesMap || !Leaflet) return;
+  if (!suggestPins) suggestPins = Leaflet.layerGroup().addTo(placesMap);
+  suggestPins.clearLayers();
+  suggestions().forEach(function (s) {
+    var m = Leaflet.marker([s.place.lat, s.place.lng], {
+      icon: pinIcon("is-osm"), title: s.place.name, alt: s.place.name, zIndexOffset: -100
+    });
+    m.on("click", function () { openSuggestion(s.place); });
+    m.addTo(suggestPins);
+  });
+}
+
 function drawPlacesMap(rows) {
   var box = document.getElementById("places-map");
   var note = document.getElementById("places-map-note");
   loadLeaflet().then(function (L) {
     if (currentTab !== "gyms") return;
-    if (!placesMap) {
+    var first = !placesMap;
+    if (first) {
       box.innerHTML = "";
-      // The map scrolls with the page. On a phone one finger scrolls (so a
-      // swipe that starts on the map still moves the page) and two fingers
-      // move or zoom the map. With a mouse, dragging moves the map and the
-      // wheel is left alone for scrolling the page.
-      var touch = !!(window.matchMedia && window.matchMedia("(pointer: coarse)").matches);
-      placesMap = L.map(box, { zoomControl: false, dragging: !touch, scrollWheelZoom: false }).setView(NOWHERE, 3);
-      L.control.zoom({ position: "topright" }).addTo(placesMap);
+      // full screen, so one finger moves the map, like every maps app
+      placesMap = L.map(box, { zoomControl: false, attributionControl: false }).setView(NOWHERE, 3);
+      L.control.attribution({ position: "topleft", prefix: false }).addTo(placesMap);
+      if (!(window.matchMedia && window.matchMedia("(pointer: coarse)").matches)) {
+        L.control.zoom({ position: "topright" }).addTo(placesMap);
+      }
       addTiles(placesMap);
       placesPins = L.layerGroup().addTo(placesMap);
-      placesMap.on("dragstart", function () { placesTouched = true; });
-      // A sideways one-finger swipe on the map means "I'm trying to move
-      // it": say how, briefly. An up-or-down swipe is just scrolling.
-      var hint = document.getElementById("places-map-hint");
-      var from = null, hintTimer = null;
-      box.addEventListener("touchstart", function (e) {
-        if (e.touches.length > 1) { placesTouched = true; hint.hidden = true; from = null; return; }
-        from = { x: e.touches[0].clientX, y: e.touches[0].clientY };
-      }, { passive: true });
-      box.addEventListener("touchmove", function (e) {
-        if (!touch || !from || e.touches.length !== 1) return;
-        var dx = Math.abs(e.touches[0].clientX - from.x), dy = Math.abs(e.touches[0].clientY - from.y);
-        if (dx < 14 || dx < dy) return;
-        hint.hidden = false;
-        clearTimeout(hintTimer);
-        hintTimer = setTimeout(function () { hint.hidden = true; }, 1600);
-      }, { passive: true });
+      placesMap.on("dragstart zoomstart", function (e) { if (e.type === "dragstart") placesTouched = true; });
+      placesMap.on("moveend", mapSettled);
+      // dragging the map tucks the sheet down, so you can see where you're going
+      placesMap.on("dragstart", function () { if (sheetSnap === "full") placeSheet("half"); });
     }
     placesMap.invalidateSize();
+    placeSheet(null, first ? false : undefined);
     placesPins.clearLayers();
 
     var pts = [];
@@ -507,7 +773,7 @@ function drawPlacesMap(rows) {
       }).addTo(placesPins);
     }
 
-    note.hidden = pts.length > 0;
+    note.hidden = pts.length > 0 || !!placesLoc;
     if (!pts.length) {
       note.textContent = rows.length ? "These gyms aren’t on the map yet." : "No gyms on the map yet.";
     }
@@ -519,20 +785,113 @@ function drawPlacesMap(rows) {
     var asked = fit !== placesFit;
     if (asked) placesTouched = false;
     if (asked || (pinKey !== placesPinKey && !placesTouched)) {
+      // keep what's framed above the sheet, not under it
+      var pad = { paddingTopLeft: [36, 50], paddingBottomRight: [36, sheetShown() + 24], maxZoom: 15, animate: false };
       var frame = pts.map(function (p) { return p.at; });
-      if (placesLoc) {
-        // you, and the handful of gyms closest to you
-        frame = pts.filter(function (p) { return p.km != null; }).slice(0, 5).map(function (p) { return p.at; });
+      if (placesLoc && !placesQuery.trim()) {
+        // you, and the closest few gyms within a short drive
+        frame = pts.filter(function (p) { return p.km != null && p.km < 8; }).slice(0, 5).map(function (p) { return p.at; });
         frame.push([placesLoc.lat, placesLoc.lng]);
       }
-      if (frame.length === 1) placesMap.setView(frame[0], 14, { animate: false });
-      else if (frame.length) placesMap.fitBounds(frame, { padding: [28, 28], maxZoom: 15, animate: false });
+      if (frame.length === 1) {
+        placesMap.setView(frame[0], 14, { animate: false });
+        placesMap.panBy([0, sheetShown() / 2], { animate: false });
+      } else if (frame.length) placesMap.fitBounds(frame, pad);
       else placesMap.setView(NOWHERE, 3, { animate: false });
     }
     placesFit = fit;
     placesPinKey = pinKey;
+    mapSettled();
   }).catch(function () {
     if (!placesMap) box.innerHTML = MAP_OFF_HTML;
+  });
+}
+
+/* "Near me": asked for only when you tap it. Your position sorts the list
+   and frames the map, and is forgotten when the app closes; that you
+   chose it is remembered, so the tab finds you again next time. */
+function locateMe(quiet) {
+  var near = document.getElementById("places-near");
+  if (!navigator.geolocation) { if (!quiet) showToast("This device can’t share its location."); return; }
+  placesLocating = true;
+  near.disabled = true;
+  renderPlacesList();
+  navigator.geolocation.getCurrentPosition(function (pos) {
+    placesLocating = false;
+    near.disabled = false;
+    near.classList.add("is-on");
+    near.setAttribute("aria-pressed", "true");
+    placesLoc = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+    if (!state.settings.nearMe) { state.settings.nearMe = true; persist(); }
+    renderPlaces();
+  }, function (err) {
+    placesLocating = false;
+    near.disabled = false;
+    if (err && err.code === 1 && state.settings.nearMe) { delete state.settings.nearMe; persist(); }
+    renderPlacesList();
+    if (!quiet || (err && err.code === 1)) {
+      showToast(err && err.code === 1
+        ? "Location is off for GymSocial. Turn it on in your phone’s settings."
+        : "Couldn’t find where you are. Try again.");
+    }
+  }, { enableHighAccuracy: false, timeout: 10000, maximumAge: 300000 });
+}
+
+function forgetMe() {
+  var near = document.getElementById("places-near");
+  placesLoc = null;
+  near.classList.remove("is-on");
+  near.setAttribute("aria-pressed", "false");
+  if (state.settings.nearMe) { delete state.settings.nearMe; persist(); }
+  renderPlaces();
+}
+
+/* ---- a gym from the map's data ---- */
+
+function openSuggestion(p) {
+  var km = distanceKm(placesLoc || (placesView && placesView.center) || p, p);
+  var addr = [p.street, [p.city, p.state].filter(Boolean).join(", ")].filter(Boolean).join(" · ");
+  var maps = "https://maps.apple.com/?q=" + encodeURIComponent(p.name) + "&ll=" + p.lat + "," + p.lng;
+  var el = openListSheet("Gym", '<div class="osm-gym">' +
+      '<span class="place-pin is-osm is-big">' + PIN_SVG + '</span>' +
+      '<div class="profile-name">' + esc(p.name) + '</div>' +
+      (addr ? '<div class="profile-handle">' + esc(addr) + '</div>' : '') +
+      (placesLoc ? '<div class="osm-km">' + esc(formatDistance(km)) + ' away</div>' : '') +
+      '<p class="osm-note">Nobody has added this gym to GymSocial yet. Add it and it&rsquo;s on the map for everyone, ' +
+        'ready to check in to.</p>' +
+      '<button class="btn btn-primary btn-block" id="osm-add">Add to GymSocial</button>' +
+      '<a class="btn btn-ghost btn-block" id="osm-maps" href="' + esc(maps) + '" target="_blank" rel="noopener">Directions</a>' +
+      '<p class="osm-source">From OpenStreetMap</p>' +
+    '</div>');
+  el.querySelector("#osm-add").addEventListener("click", function (e) {
+    e.currentTarget.disabled = true;
+    addSuggestion(p).then(function (g) {
+      closeListSheet();
+      renderPlaces();
+      openGymModal(g.id);
+      showToast("Added " + gymLabel(g) + ".");
+    });
+  });
+}
+
+/* One gym, one place: if it's already on GymSocial under another spelling,
+   that one is used. Otherwise it's added with the map's pin, so it never
+   needs an address lookup; only a missing town is filled in. */
+function addSuggestion(p) {
+  var needTown = !p.city ? placeOf(p.lat, p.lng) : Promise.resolve(null);
+  return needTown.then(function (town) {
+    var fields = { name: p.name, street: p.street || "", city: p.city || (town && town.city) || "", state: p.state || (town && town.state) || "" };
+    var match = closestGym(fields, allKnownGyms().filter(function (x) { return x.mine || !x.private; }));
+    if (match && (match.exact || (match.gym.lat != null && distanceKm(match.gym, p) < 0.4))) {
+      var mine = adoptGym(match.gym);
+      persist();
+      return mine;
+    }
+    var fresh = { id: uid("gym"), name: fields.name, street: fields.street, city: fields.city, state: fields.state,
+                  offerings: [], lat: p.lat, lng: p.lng, locDirty: true };
+    state.gyms.push(fresh);
+    persist();
+    return fresh;
   });
 }
 
@@ -1106,32 +1465,11 @@ export function startGyms() {
       input.dispatchEvent(new Event("input"));
     });
 
-    /* Your location is only ever asked for by this button, used to sort the
-       list and frame the map, and forgotten when the app closes. */
     var near = document.getElementById("places-near");
-    near.addEventListener("click", function () {
-      if (placesLoc) {
-        placesLoc = null;
-        near.classList.remove("is-on");
-        near.setAttribute("aria-pressed", "false");
-        renderPlaces();
-        return;
-      }
-      if (!navigator.geolocation) { showToast("This device can’t share its location."); return; }
-      near.disabled = true;
-      navigator.geolocation.getCurrentPosition(function (pos) {
-        near.disabled = false;
-        near.classList.add("is-on");
-        near.setAttribute("aria-pressed", "true");
-        placesLoc = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-        renderPlaces();
-      }, function (err) {
-        near.disabled = false;
-        showToast(err && err.code === 1
-          ? "Location is off for GymSocial. Turn it on in your phone’s settings."
-          : "Couldn’t find where you are. Try again.");
-      }, { enableHighAccuracy: false, timeout: 10000, maximumAge: 300000 });
-    });
+    near.addEventListener("click", function () { if (placesLoc) forgetMe(); else locateMe(false); });
+    // searching wants the room: the sheet comes all the way up
+    input.addEventListener("focus", function () { placeSheet("full"); });
+    wireSheet();
   })();
   document.getElementById("gym-modal-close").addEventListener("click", closeGymModal);
   document.getElementById("gym-modal-overlay").addEventListener("click", function (e) {

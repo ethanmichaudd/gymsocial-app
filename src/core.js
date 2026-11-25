@@ -798,10 +798,20 @@ export function weekStartOf(date) {
 
 function startOfDay(date) { var d = new Date(date); d.setHours(0, 0, 0, 0); return d; }
 
+/* Whose rule counts a streak: always the person's own. Yours is in your
+   settings; a friend's comes with their profile (weekly goal, streak mode),
+   so the number a friend sees for you is the number your Home shows.
+   Before their profile has loaded: weeks in a row with a workout. */
+export function streakRuleOf(userId) {
+  if (!userId || userId === state.me.id) return state.settings || {};
+  var u = findUser(userId);
+  return (u && u.streakRule) || { streakMode: "weekly", weeklyGoal: 1 };
+}
+
 /* Three ways to count a streak, all sharing one rule: the period you're
    currently inside can't break the streak just because it isn't finished. */
 export function computeStreak(userId) {
-  var st = state.settings || {};
+  var st = streakRuleOf(userId);
   var mode = st.streakMode || "weekly";
   var mine = workoutsOf(userId);
   var out = { mode: mode, current: 0, best: 0, inPeriod: 0, goal: 1, days: 0, total: mine.length };
