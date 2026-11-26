@@ -1342,3 +1342,35 @@ export function startCore4() {
     });
   })();
 }
+
+/* ----------------------------- loading -----------------------------
+   Grey shapes where something is on its way, the outline of what will be
+   there, instead of an empty space or a "nothing here" that's not true yet. */
+function skelLine(w, h) {
+  return '<span class="skel" style="width:' + w + ';height:' + (h || 12) + 'px"></span>';
+}
+
+export function skeletonHtml(kind, n) {
+  var out = [];
+  for (var i = 0; i < (n || 3); i++) {
+    if (kind === "card") {
+      out.push('<div class="skel-card">' +
+        '<div class="skel-head"><span class="skel skel-dot"></span><span class="skel-lines">' +
+          skelLine("44%", 14) + skelLine("28%", 10) + '</span></div>' +
+        skelLine("55%", 22) +
+        '<div class="skel-stats">' + skelLine("20%", 30) + skelLine("16%", 30) + skelLine("26%", 30) + '</div>' +
+        skelLine("68%", 12) +
+      '</div>');
+    } else if (kind === "faces") {
+      out.push('<span class="skel-face"><span class="skel skel-dot is-big"></span>' + skelLine("34px", 9) + '</span>');
+    } else {
+      out.push('<div class="skel-row"><span class="skel skel-dot is-sm"></span><span class="skel-lines">' +
+        skelLine((62 - i * 9) + "%", 13) + skelLine((38 + i * 7) + "%", 10) + '</span></div>');
+    }
+  }
+  var inner = kind === "faces" ? '<div class="skel-faces">' + out.join("") + '</div>' : out.join("");
+  return '<div class="skel-wrap" aria-hidden="true">' + inner + '</div>';
+}
+
+/* Said once to a screen reader, where the shapes are. */
+export var LOADING_NOTE = '<span class="sr-only" role="status">Loading</span>';

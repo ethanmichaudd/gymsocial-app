@@ -168,6 +168,11 @@ const sync = {
   again: false,        // a save landed mid-push: push once more after
 };
 
+/** Signed in, and your friends haven't loaded yet (on this visit, on a phone that has none saved). */
+export function socialPending() {
+  return !!sync.user && !sync.lastSocial && sync.status !== "error" && sync.status !== "offline";
+}
+
 export function syncStatus() {
   return { status: sync.status, lastSynced: sync.lastSynced, user: sync.user };
 }
@@ -182,15 +187,17 @@ function setStatus(s) {
  * Called once by the app at startup. Watches the session and runs a full
  * sync whenever someone signs in or the app comes back to the foreground.
  */
-export function startSync({ getState, onChange, onStatus }) {
+export function startSync({ getState, onChange, onStatus, onAuth }) {
   sync.getState = getState;
   sync.onChange = onChange;
   sync.onStatus = onStatus;
-  if (!supabase) return;
+  if (!supabase) { if (onAuth) onAuth(false); return; }
 
   supabase.auth.onAuthStateChange((event, session) => {
     const before = sync.user && sync.user.id;
     sync.user = session ? { id: session.user.id, email: session.user.email } : null;
+    // known right away from this phone's saved session: no network needed
+    if (onAuth) onAuth(!!sync.user);
     if (!sync.user) { setStatus("off"); return; }
     // the listener must not await Supabase calls itself, so hop off it
     if (sync.user.id !== before) {
@@ -738,7 +745,12 @@ async function pullAll() {
     ? gq.or(`created_by.eq.${uid},id.in.(${gymIds.join(",")})`)
     : gq.eq("created_by", uid));
   if (gy.error) throw gy.error;
+  // Gyms are one shared directory, so removing one can't delete its row (and
+  // others may train there). It goes on a list in your settings instead, and
+  // a pull never puts it back on your list.
+  const removed = new Set(state.settings.removedGyms || []);
   gy.data.forEach((r) => {
+    if (removed.has(r.id)) return;
     const g = { id: r.id, name: r.name, street: r.street || "", city: r.city || "", state: r.state || "" };
     const local = state.gyms.find((x) => x.id === r.id);
     if (r.is_private !== undefined) g.private = Boolean(r.is_private);
@@ -776,6 +788,9 @@ async function pullAll() {
     }
     meta.workouts[r.id] = workoutPrint(incoming);
     if (incoming.photoPath) meta.photos[r.id] = incoming.photoPath;
+    // checked in at a gym you've since removed (from another phone): the
+    // check-in goes, here and then in the cloud on the next push
+    if (incoming.gymId && removed.has(incoming.gymId)) incoming.gymId = null;
   });
 
   // deleted on another device: it was synced, it's gone from the cloud
@@ -1281,6 +1296,8 @@ export function adoptGym(g) {
   const state = sync.getState();
   let mine = state.gyms.find((x) => x.id === g.id);
   if (mine) return mine;
+  // picked again after you'd removed it: it's yours again
+  if (state.settings.removedGyms) state.settings.removedGyms = state.settings.removedGyms.filter((id) => id !== g.id);
   mine = { id: g.id, name: g.name, street: g.street || "", city: g.city || "", state: g.state || "", offerings: [] };
   if (hasPin(g)) { mine.lat = g.lat; mine.lng = g.lng; }
   if (g.private) mine.private = true;

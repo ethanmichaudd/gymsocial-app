@@ -3,10 +3,10 @@
  * tags, new friendships).
  */
 
-import { acceptFriendRequest, currentUser, declineFriendRequest, refreshSocial } from "./store.js";
+import { acceptFriendRequest, currentUser, declineFriendRequest, refreshSocial, socialPending } from "./store.js";
 import {
-  avatarHtml, closeListSheet, esc, findPerson, findUser, openListSheet, persist, shortDate,
-  showToast, signedOut, state, workoutById
+  avatarHtml, closeListSheet, esc, findPerson, findUser, LOADING_NOTE, openListSheet, persist, shortDate,
+  showToast, signedOut, skeletonHtml, state, workoutById
 } from "./core.js";
 import { actBtn, knownPeople, oneEmoji, openWorkoutDetail, renderFriends } from "./feed.js";
 import { renderHome } from "./home.js";
@@ -269,7 +269,9 @@ export function openInbox() {
   }
   var seen = inboxSeen();
   var el = openListSheet("Inbox", "");
-  drawInbox(el, seen);
+  // nothing saved on this phone yet: shapes until it arrives
+  if (socialPending() && !(state.inbox || []).length) el.innerHTML = LOADING_NOTE + skeletonHtml("row", 4);
+  else drawInbox(el, seen);
   markInboxSeen();
   var fresh = refreshSocial(true);
   if (fresh) fresh.then(function () {

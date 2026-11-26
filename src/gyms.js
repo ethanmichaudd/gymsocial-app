@@ -13,7 +13,7 @@ import {
 import {
   activateTab, avatarHtml, calendarDate, closeListSheet, currentTab, esc, findExercise,
   findUser, friendsOf, gymAddress, gymKey, gymLabel, gymsOf, localDayKey, MONTHS_LONG,
-  myWorkouts, openConfirm, openListSheet, persist, showToast, signedOut, state, titleCase, uid,
+  LOADING_NOTE, myWorkouts, openConfirm, openListSheet, persist, showToast, signedOut, skeletonHtml, state, titleCase, uid,
   workoutsOf
 } from "./core.js";
 import { renderHome } from "./home.js";
@@ -383,6 +383,8 @@ function placesRows() {
   var visits = {};
   myWorkouts().forEach(function (w) { if (w.gymId) visits[w.gymId] = (visits[w.gymId] || 0) + 1; });
   var home = state.settings.homeGymId;
+  var removed = {};
+  (state.settings.removedGyms || []).forEach(function (id) { removed[id] = true; });
 
   var rows = allKnownGyms().map(function (g) {
     var f = friends[g.id] || { users: [], today: [] };
@@ -392,6 +394,7 @@ function placesRows() {
     };
   }).filter(function (r) {
     if (q) return (r.gym.name + " " + gymAddress(r.gym)).toLowerCase().indexOf(q) !== -1;
+    if (removed[r.gym.id] && !r.friends.length) return false;     // you removed it; search still finds it
     // nothing typed: places somebody actually trains at, plus your own.
     // (total is null when the database can't count yet -- then show them all)
     return r.gym.mine || r.friends.length || r.gym.total == null || r.gym.total > 0;
@@ -519,7 +522,7 @@ function renderPlacesList(rows) {
     html += '<div class="sheet-head">' + (q ? "On the map" : "More gyms here") +
       '<span class="sheet-sub">Tap one to add it</span></div>' + more.map(suggestionRowHtml).join("");
   } else if (nearbyBusy) {
-    html += '<div class="sheet-loading">Looking for more gyms here&hellip;</div>';
+    html += '<div class="sheet-head">More gyms here</div>' + LOADING_NOTE + skeletonHtml("row", 2);
   }
 
   if (away.length) html += '<div class="sheet-head">Elsewhere</div>' + away.map(placeRowHtml).join("");
@@ -711,6 +714,7 @@ function mapSettled() {
     if (currentTab !== "gyms" || !placesView || !canAskNearby(placesView)) return;
     var view = placesView;
     nearbyBusy = true;
+    if (!suggestions().length) renderPlacesList();      // shapes while it looks
     lookUpNearby(view).then(function (asked) {
       nearbyBusy = false;
       if (currentTab !== "gyms") return;
@@ -971,6 +975,7 @@ export function openGymFinder(onPick) {
 var openGymId = null;
 var gymMoving = false;          // the pin is being dragged
 var gymStats = {};              // gym id -> totals from the database, kept for this session
+var statsLoading = {};          // gym id -> true while its totals are on the way
 var gymMap = null;
 var gymMapPin = null;
 
@@ -1009,11 +1014,16 @@ export function openGymModal(gymId) {
 
   // Everyone's totals come from the database and never include a name.
   if (currentUser()) {
+    var redraw = function () { if (openGymId === gymId && gymModalIsOpen() && !gymMoving) drawGymPage(); };
+    if (!gymStats[gymId]) { statsLoading[gymId] = true; redraw(); }
     fetchGymStats(gymId).then(function (stats) {
-      if (!stats) return;
-      gymStats[gymId] = stats;
-      if (openGymId === gymId && gymModalIsOpen() && !gymMoving) drawGymPage();
-    }).catch(function () { /* offline: the page still shows what this phone knows */ });
+      delete statsLoading[gymId];
+      if (stats) gymStats[gymId] = stats;
+      redraw();
+    }).catch(function () {
+      delete statsLoading[gymId];      // offline: the page still shows what this phone knows
+      redraw();
+    });
   }
   lookUpPin(gymId).then(function () {
     if (openGymId === gymId && gymModalIsOpen() && !gymMoving) drawGymPage();
@@ -1097,7 +1107,10 @@ function drawGymPage() {
     }
 
     // ---- everyone else, as totals only ----
-    if (stats) {
+    if (!stats && statsLoading[gymId]) {
+      html += '<div class="manage-head">Popular here <span class="head-note">last 30 days</span></div>' +
+        LOADING_NOTE + skeletonHtml("row", 3);
+    } else if (stats) {
       if (stats.people) {
         html += '<p class="gym-people"><strong>' + stats.people + '</strong> ' +
           (stats.people === 1 ? "person" : "people") + ' trained here in the last 30 days</p>';
@@ -1422,6 +1435,10 @@ export function startGyms() {
         onConfirm: function () {
           myWorkouts().forEach(function (w) { if (w.gymId === g.id) w.gymId = null; });
           state.gyms = state.gyms.filter(function (x) { return x.id !== g.id; });
+          // remembered (and synced), so the next sync doesn't bring it back
+          var gone = (state.settings.removedGyms || []).filter(function (id) { return id !== g.id; });
+          gone.push(g.id);
+          state.settings.removedGyms = gone.slice(-200);
           if (draft.gymId === g.id) draft.gymId = "";
           if (editDraft && editDraft.gymId === g.id) editDraft.gymId = "";
           if (state.settings.homeGymId === g.id) delete state.settings.homeGymId;

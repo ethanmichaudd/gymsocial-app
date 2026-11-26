@@ -449,3 +449,29 @@ test("Gyms from the map: switched off from the database", async ({ browser: b })
   check("with places off in app_config, the map's data is never asked", db.overpass.length === 0 && (await page.locator("#places-list .place-row.is-osm").count()) === 0, String(db.overpass.length));
   await context.close();
 });
+
+// ---------- removing a gym sticks ----------
+test("Remove gym: stays removed after a sync and a reload", async ({ browser: b }) => {
+  browser = b;
+  const { context, page, db, errors } = await open({ signedIn: true });
+  await page.click('[data-tab="gyms"]'); await page.waitForTimeout(3000);
+  await page.locator("#places-list .place-row:not(.is-osm)", { hasText: "BU FitRec" }).click(); await page.waitForTimeout(600);
+  await page.click("#gym-modal-edit"); await page.waitForTimeout(300);
+  await page.click("#gym-add-remove"); await page.waitForTimeout(300);
+  await page.click("#confirm-yes"); await page.waitForTimeout(500);
+  check("gone from your list right away, and from the Gyms tab", !(await state(page)).gyms.some((g) => g.id === G2) && !(await rowsText(page)).some((t) => /BU FitRec/.test(t)), (await rowsText(page)).join(" | "));
+  await page.waitForTimeout(3000);
+  const up = db.log.filter((l) => l.method === "POST" && l.path.endsWith("/workouts")).map((l) => [].concat(l.body)).flat().filter((r) => r.user_id === ME).pop();
+  check("its check-in is cleared in the cloud too", !!up && up.gym_id === null, JSON.stringify(up));
+  const prof = db.log.filter((l) => l.method === "PATCH" && l.path.endsWith("/profiles")).pop();
+  check("remembered in your settings, so other phones know", !!prof && (prof.body.settings.removedGyms || []).includes(G2), prof && JSON.stringify(prof.body.settings.removedGyms));
+  // another sync and a reload: it used to come back here, because you added it
+  await page.reload(); await page.waitForTimeout(3500);
+  check("after a reload and a full sync it's still gone", !(await state(page)).gyms.some((g) => g.id === G2) && (await state(page)).workouts.every((w) => w.gymId !== G2));
+  await page.click('[data-tab="gyms"]'); await page.waitForTimeout(2500);
+  check("and still off the Gyms tab", !(await rowsText(page)).some((t) => /BU FitRec/.test(t)));
+  await page.fill("#places-search", "fitrec"); await page.waitForTimeout(300);
+  check("search still finds it, to add back", (await rowsText(page)).some((t) => /BU FitRec/.test(t)));
+  check("no console errors", errors.length === 0, errors.join(" || "));
+  await context.close();
+});

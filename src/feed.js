@@ -6,12 +6,12 @@
 import {
   acceptFriendRequest, addComment, cancelFriendRequest, cloudEnabled, currentUser,
   declineFriendRequest, deleteComment, photoSrc, refreshSocial, removeFriend, searchPeople,
-  sendFriendRequest, setReaction
+  sendFriendRequest, setReaction, socialPending
 } from "./store.js";
 import {
   activateTab, avatarHtml, buzz, defaultUnit, calendarDate, closeListSheet, durationOf, esc, featureOn,
   findExercise, findGym, findPerson, findUser, formatDuration, formatDurationLong, formatTime,
-  computeStreak, FLAME_SVG, FRIENDS_SVG, friendsOf, streakUnit, gymAddress, gymLabel, localDayKey, loggedSetTime, metricOf,
+  computeStreak, FLAME_SVG, FRIENDS_SVG, friendsOf, LOADING_NOTE, skeletonHtml, streakUnit, gymAddress, gymLabel, localDayKey, loggedSetTime, metricOf,
   openConfirm, openListSheet, persist, prsAt, repSetCount, sessionDistance, sessionFacts,
   sessionVolume, shortDate, showToast, signedOut, state, summarizeSets, weekStartOf, workoutById,
   workoutsOf, workoutTitleHtml
@@ -674,6 +674,13 @@ export function renderFriends() {
   }
 
   document.getElementById("friends-sub").textContent = "";
+
+  // a phone that hasn't got your friends yet: their outline, not "no friends"
+  if (!friends.length && socialPending()) {
+    el.innerHTML = LOADING_NOTE + skeletonHtml("faces", 5) +
+      '<div class="skel-wrap" aria-hidden="true"><span class="skel skel-bar"></span></div>' + skeletonHtml("card", 2);
+    return;
+  }
 
   if (!friends.length) {
     el.innerHTML = '<div class="signin-card">' +
